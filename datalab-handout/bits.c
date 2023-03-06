@@ -236,7 +236,13 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-  return 2;
+  // when x and y aren't the same sign, they may overflow when substracting
+  // then use most significant bit to judge y - x >= 0
+  int most_significant_bit = 0x1 << 31;
+  int positive_x_negative_y = (!(x & most_significant_bit)) & (!!(y & most_significant_bit));
+  int negative_x_positive_y = (!!(x & most_significant_bit)) & (!(y & most_significant_bit));
+  int y_substract_x = !((y + ~(x) + 1) & most_significant_bit);
+  return negative_x_positive_y | ((!positive_x_negative_y) & y_substract_x);
 }
 //4
 /* 
@@ -248,7 +254,8 @@ int isLessOrEqual(int x, int y) {
  *   Rating: 4 
  */
 int logicalNeg(int x) {
-  return 2;
+  // judge 0, 0 and -0 have the same most significant bit 0
+  return (((~(x) + 1) | x) >> 31) + 1;
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
