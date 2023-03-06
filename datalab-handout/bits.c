@@ -144,7 +144,8 @@ NOTES:
  *   Rating: 1
  */
 int bitXor(int x, int y) {
-  return 2;
+  // x ^ y = x & ~y + ~x & y = ~(~(x & ~y) & ~(~x & y))
+  return ~(~(x & (~y)) & ~((~x) & y));
 }
 /* 
  * tmin - return minimum two's complement integer 
@@ -153,9 +154,8 @@ int bitXor(int x, int y) {
  *   Rating: 1
  */
 int tmin(void) {
-
-  return 2;
-
+  // minimum two's complement integer is 0x80000000
+  return 0x1 << 31;
 }
 //2
 /*
@@ -166,7 +166,11 @@ int tmin(void) {
  *   Rating: 1
  */
 int isTmax(int x) {
-  return 2;
+  // maximum two's complement number is 0x7fffffff
+  // x will overflow when it plus 1, so we use `~(x + 1) ^ x` to judge
+  // and to make `~(x + 1) ^ x` work we need to judge 0xffffffff
+  // because 0xffffffff also satisfy `~(x + 1) ^ x`
+  return !((~(x + 1) ^ x) | !(~x));
 }
 /* 
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
@@ -177,7 +181,10 @@ int isTmax(int x) {
  *   Rating: 2
  */
 int allOddBits(int x) {
-  return 2;
+  // we need to judge if x's every odd-numbered bit is 1
+  // so we compare with 0xAAAAAAAA
+  int target_number = 0xAA + (0xAA << 0x8) + (0xAA << 0x10) + (0xAA << 0x18);
+  return !((x & target_number) ^ target_number);
 }
 /* 
  * negate - return -x 
@@ -187,7 +194,8 @@ int allOddBits(int x) {
  *   Rating: 2
  */
 int negate(int x) {
-  return 2;
+  // easy:) just invert and add 1
+  return ~(x) + 1;
 }
 //3
 /* 
@@ -200,7 +208,12 @@ int negate(int x) {
  *   Rating: 3
  */
 int isAsciiDigit(int x) {
-  return 2;
+  // judge x - 0x30 >= 0 and 0x39 - x >= 0
+  // use most significant bit to judge sign
+  int most_significant_bit = 0x1 << 31;
+  int x_substract_0x30 = x + ~(0x30) + 1;
+  int x39_substract_x = 0x39 + ~(x) + 1;
+  return !((most_significant_bit & x_substract_0x30) | (most_significant_bit & x39_substract_x));
 }
 /* 
  * conditional - same as x ? y : z 
@@ -210,7 +223,10 @@ int isAsciiDigit(int x) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-  return 2;
+  // use most significant bit to judge x >= 0 and switch one result
+  // use left shift and right shift to change
+  int result_mask = (!x << 31) >> 31;
+  return (y & ~(result_mask)) + (z & result_mask);
 }
 /* 
  * isLessOrEqual - if x <= y  then return 1, else return 0 
