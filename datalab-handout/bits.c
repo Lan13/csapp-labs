@@ -270,7 +270,19 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
-  return 0;
+  // 
+  int temp = x ^ (x << 1);
+  int bit_16, bit_8, bit_4, bit_2, bit_1;
+  bit_16 = !!(temp >> 16) << 4;
+  temp = temp >> bit_16;
+  bit_8 = !!(temp >> 8) << 3;
+  temp = temp >> bit_8;
+  bit_4 = !!(temp >> 4) << 2;
+  temp = temp >> bit_4;
+  bit_2 = !!(temp >> 2) << 1;
+  temp = temp >> bit_2;
+  bit_1 = !!(temp >> 1);
+  return bit_16 + bit_8 + bit_4 + bit_2 + bit_1 + 1;
 }
 //float
 /* 
@@ -285,7 +297,14 @@ int howManyBits(int x) {
  *   Rating: 4
  */
 unsigned floatScale2(unsigned uf) {
-  return 2;
+  // first judge exponent, then refer to IEEE
+  unsigned exponent = (uf & 0x7f800000) >> 23;
+  unsigned fraction = uf & 0x007fffff;
+  if (exponent == 0xff) // Not a Number or Infinity
+    return uf;
+  if (exponent == 0x0)
+    return (uf & 0x80000000) + (exponent << 23) + (fraction << 1);
+  return (uf & 0x80000000) + ((exponent + 1) << 23) + fraction;
 }
 /* 
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
@@ -300,7 +319,14 @@ unsigned floatScale2(unsigned uf) {
  *   Rating: 4
  */
 int floatFloat2Int(unsigned uf) {
-  return 2;
+  // first judge exponent, then refer to IEEE
+  unsigned exponent = (uf & 0x7f800000) >> 23;
+  int value = 1 << (exponent - 0x7f); // get int exponent bits;
+  if (exponent < 0x7f)  // fraction
+    return 0;
+  if (exponent >= (0x7f + 0x1f))  // int value overflow 
+    return 0x80000000u;
+  return ((0x1 << 31) & uf) ? (-value) : value; // check sign bit
 }
 /* 
  * floatPower2 - Return bit-level equivalent of the expression 2.0^x
@@ -316,5 +342,11 @@ int floatFloat2Int(unsigned uf) {
  *   Rating: 4
  */
 unsigned floatPower2(int x) {
-    return 2;
+  // first judge exponent, then refer to IEEE
+    int exponent = x + 127;
+    if (exponent <= 0)  // underflow
+      return 0;
+    if (exponent >= 255)  // Not a Number or Infinity
+      return 0xff << 23;
+    return exponent << 23;
 }
