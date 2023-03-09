@@ -270,7 +270,7 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
-  // 
+  // make 16, 8, 4, 2, 1 bits mask to represent
   int temp = x ^ (x << 1);
   int bit_16, bit_8, bit_4, bit_2, bit_1;
   bit_16 = !!(temp >> 16) << 4;
@@ -343,10 +343,10 @@ int floatFloat2Int(unsigned uf) {
  */
 unsigned floatPower2(int x) {
   // first judge exponent, then refer to IEEE
-    int exponent = x + 127;
-    if (exponent <= 0)  // underflow
-      return 0;
-    if (exponent >= 255)  // Not a Number or Infinity
-      return 0xff << 23;
-    return exponent << 23;
+  int exponent = x + 127;
+  if (exponent <= 0)  // underflow
+    return 0;
+  if (exponent >= 255)  // Not a Number or Infinity
+    return 0xff << 23;
+  return exponent << 23;
 }
