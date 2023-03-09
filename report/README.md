@@ -2,6 +2,8 @@
 
 姓名：蓝俊玮 	学号：PB20111689
 
+[TOC]
+
 ## 实验摘要
 
 在本课程中，我一共完成了下列 2 个实验：
@@ -13,7 +15,7 @@
 
 我使用的是 Windows 下的 WSL2
 
-![](/image/csapp-env.png)
+![](image/csapp-env.png)
 
 ## 实验介绍
 
@@ -22,7 +24,7 @@
 首先获取实验框架，然后解压：
 
 ```bash
-wget http://csapp.cs.cmu.edu/im/labs/datalab.tar
+wget http://csapp.cs.cmu.edu/3e/datalab-handout.tar
 tar -xvf datalab-handout.tar
 rm datalab-handout.tar
 ```
@@ -33,7 +35,7 @@ rm datalab-handout.tar
 sudo apt-get install gcc-multilib
 ```
 
-#### 1. bitXor 函数
+#### 1. `bitXor` 函数
 
 **目标：只使用符号按位非 `~` 和符号按位与 `&` 来实现按位异或 `^`**
 
@@ -58,7 +60,7 @@ int bitXor(int x, int y) {
 }
 ```
 
-#### 2. tmin 函数
+#### 2. `tmin` 函数
 
 **目标：返回最小二进制补码整数**
 
@@ -73,7 +75,7 @@ int tmin(void) {
 }
 ```
 
-#### 3. isTmax 函数
+#### 3. `isTmax` 函数
 
 **目标：判断是否为最大二进制补码整数**
 
@@ -91,7 +93,7 @@ int isTmax(int x) {
 }
 ```
 
-#### 4. allOddBits 函数
+#### 4. `allOddBits` 函数
 
 **目标：判断所有奇数位置是否都为 1**
 
@@ -108,7 +110,7 @@ int allOddBits(int x) {
 }
 ```
 
-#### 5. negate 函数
+#### 5. `negate` 函数
 
 **目标：返回一个输入数字的相反数**
 
@@ -123,7 +125,7 @@ int negate(int x) {
 }
 ```
 
-#### 6. isAsciiDigit 函数
+#### 6. `isAsciiDigit` 函数
 
 **目标：判断一个数字大小是否位于区间 `0x30 <= x <= 0x39`**
 
@@ -142,7 +144,7 @@ int isAsciiDigit(int x) {
 }
 ```
 
-#### 7. conditional 函数
+#### 7. `conditional` 函数
 
 **目标：实现与 `x ? y : z` 一样的功能**
 
@@ -159,7 +161,7 @@ int conditional(int x, int y, int z) {
 }
 ```
 
-#### 8. isLessOrEqual 函数
+#### 8. `isLessOrEqual` 函数
 
 **目标：判断两个数的大小关系 `x <= y` 是否成立**
 
@@ -183,7 +185,7 @@ int isLessOrEqual(int x, int y) {
 }
 ```
 
-#### 9. logicalNeg 函数
+#### 9. `logicalNeg` 函数
 
 **目标：判断一个数是否为 0**
 
@@ -198,7 +200,7 @@ int logicalNeg(int x) {
 }
 ```
 
-#### 10. howManyBits 函数
+#### 10. `howManyBits` 函数
 
 **目标：判断一个函数最少需要多少位来表示**
 
@@ -224,7 +226,7 @@ int howManyBits(int x) {
 }
 ```
 
-#### 11. floatScale2 函数
+#### 11. `floatScale2` 函数
 
 **目标：给出输入浮点数 `f`，返回 `2 * f` 的值**
 
@@ -249,7 +251,7 @@ unsigned floatScale2(unsigned uf) {
 }
 ```
 
-#### 12. floatFloat2Int 函数
+#### 12. `floatFloat2Int` 函数
 
 **目标：将输入浮点数 `f` 类型转换为整型**
 
@@ -274,7 +276,7 @@ int floatFloat2Int(unsigned uf) {
 }
 ```
 
-#### 13. floatPower2 函数
+#### 13. `floatPower2` 函数
 
 **目标：给出整数 `x`，返回浮点数 `2.0 ^ x ` 的浮点表示结果**
 
@@ -296,4 +298,78 @@ unsigned floatPower2(int x) {
 
 #### Data Lab 结果展示
 
-![](/image/csapp-datalab.png)
+![](image/csapp-datalab.png)
+
+### Shell Lab
+
+首先获取实验框架，然后解压：
+
+```bash
+wget http://csapp.cs.cmu.edu/3e/shlab-handout.tar
+tar -xvf shlab-handout.tar
+rm shlab-handout.tar
+```
+
+#### 1. `sigchld_handler` 函数
+
+
+
+#### 2. `sigint_handler` 函数
+
+
+
+#### 3. `sigtstp_handler` 函数
+
+
+
+#### 4. `waitfg` 函数
+
+
+
+#### 5. `do_bgfg` 函数
+
+
+
+#### 6. `bulitin_cmd` 函数
+
+
+
+#### 7. `eval` 函数
+
+
+
+#### Shell Lab 结果展示
+
+因为本次实验并没有给出一个统一的测试脚本，因此使用一个自己编写的脚本来快速识别程序的正确性。脚本的具体内容如下：
+
+```shell
+#! /bin/bash
+
+touch tsh.out
+make test01 > tsh.out
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16
+do
+    make test$i >> tsh.out
+done
+
+sed -i 's|(\b[0-9]*)|(1000)|g;' tsh.out
+sed -i 's|(\b[0-9]*)|(1000)|g;' tshref.out
+
+touch diff.out
+echo "蓝俊玮 PB20111689" > diff.out
+whoami >> diff.out
+diff tsh.out tshref.out >> diff.out
+```
+
+首先创建一个新的文件 `tsh.out` 来记录 `tsh` 程序的输出结果。首先使用 `make test01` 并且使用重定向符 `>` 将输出覆盖到 `tsh.out` 文件中，紧接着使用一个循环，将后续测试的输出结果追加到 `tsh.out` 文件当中。因为程序每次运行的 pid 不一定会相同，因此将输出信息中的 `(pid)` 部分替换成 `(1000)`，以便于比较。这一点可以通过 `sed sed -i 's|(\b[0-9]*)|(1000)|g;' tsh.out` 完成。最后创建一个新的文件 `diff.out` 文件，并且运行 `diff tsh.out tshref.out > diff.out` 指令，将两个文件的不同信息记录到 `diff.out` 当中，以便于检查程序与参考程序的输出有何不同。
+
+下面便是结果展示（在这里我预先删除了 `tshref.out` 当中的两条 `make` 信息）：
+
+![](image/csapp-shell-diff1.png)
+
+![](image/csapp-shell-diff2.png)
+
+![](image/csapp-shell-diff3.png)
+
+可以看出 `tsh.out` 和 `tshref.out` 之间只有 `/bin/ps` 的运行结果有较大差别，但这是不可避免的。并且可以看出程序 `tsh` 执行 `/bin/ps` 的输出是正常的（只是因为我的实验环境在 WSL 中，而多出了许多无关的内容），因此可以认为 `tsh` 的行为与 `tshref` 达到了一致，因此符合实验要求。
+
