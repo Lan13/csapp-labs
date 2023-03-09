@@ -11,4 +11,6 @@ sed -i 's|(\b[0-9]*)|(1000)|g;' tsh.out
 sed -i 's|(\b[0-9]*)|(1000)|g;' tshref.out
 
 touch diff.out
-diff tsh.out tshref.out > diff.out
+echo "蓝俊玮 PB20111689" > diff.out
+whoami >> diff.out
+diff tsh.out tshref.out >> diff.out
