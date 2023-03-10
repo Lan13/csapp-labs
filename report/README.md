@@ -312,31 +312,242 @@ rm shlab-handout.tar
 
 #### 1. `sigchld_handler` 函数
 
+`sigchld_handler` 函数用来处理 `SIGCHLD` 信号，`SIGCHLD` 信号产生有以下这些条件：
 
+- 子进程终止时会向父进程发送 `SIGCHLD` 信号，告知父进程回收自己，但该信号的默认处理动作为忽略，因此父进程仍然不会去回收子进程，需要捕捉处理实现子进程的回收。
+- 子进程收到 `SIGSTOP` 信号后被强制结束
+- 子进程暂停运行，接受到 `SIGCONT` 后唤醒时
+
+因此根据提示，可以在 `sigchld_handler` 中通过使用一个函数 `waitpid` 并且搭配到参数 `WUNTRACED` 和 `WNOHANG` 来获取信号对应的进程号 `pid` 和状态 `status`。`WNOHANG` 选项使得 `waitpid` 函数变为同步函数，如果没有僵死进程就能立刻返回；`WUNTRACED` 选项使得这一函数能够处理暂停的进程。捕捉这些信息后再判断信息的类别：
+
+- 如果在捕捉信息的过程中发现子进程是暂停运行，则需要将子进程的状态改为暂停 `ST`
+- 如果在捕捉信息的过程中发现子进程是结束运行，则需要将子进程从任务 `jobs` 列表中删除
+
+```c
+void sigchld_handler(int sig)
+{
+    int jid, status;
+    pid_t pid;
+    struct job_t* job;
+    
+    // In sigchld handler, use exactly one call to waitpid.
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        jid = pid2jid(pid);
+        job = getjobpid(jobs, pid);
+        // judge child process status
+        if (WIFSTOPPED(status)) {   // suspend
+            printf("Job [%d] (%d) stopped by signal %d\n", jid, pid, WSTOPSIG(status));
+            job->state = ST;
+        }
+        else {      // stop
+            deletejob(jobs, pid);
+            if (WIFSIGNALED(status)) {
+                printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, WTERMSIG(status));
+            }
+        }
+    }
+    return;
+}
+```
 
 #### 2. `sigint_handler` 函数
 
+`sigint_handler` 函数用来处理 `SIGINT` 信号。这个函数比较简单，只需要获取当前前台的任务 `pid`，然后调用 `kill(-pid, SIGINT)` 函数来向进程发送信号即可。
 
+```c
+void sigint_handler(int sig)
+{
+    pid_t pid = fgpid(jobs);
+    if (pid) {
+        kill(-pid, SIGINT);
+    }
+    return;
+}
+```
 
 #### 3. `sigtstp_handler` 函数
 
+`sigtstp_handler` 函数用来处理 `SIGTSTP` 信号。同理，只需要获取当前前台的任务 `pid`，然后调用 `kill(-pid, SIGTSTP)` 函数来向进程发送信号即可。
 
+```c
+void sigtstp_handler(int sig)
+{
+    pid_t pid = fgpid(jobs);
+    if (pid) {
+        kill(-pid, SIGTSTP);
+    }
+    return;
+}
+```
 
 #### 4. `waitfg` 函数
 
+根据实验提示
 
+> In waitfg, use a busy loop around the sleep function.
+
+因此可以这样实现：
+
+```c
+void waitfg(pid_t pid)
+{
+    struct job_t* job = getjobpid(jobs, pid);
+    // In waitfg, use a busy loop around the sleep function
+    while (job && job->state == FG) {
+        sleep(1);
+    }
+    return;
+}
+```
 
 #### 5. `do_bgfg` 函数
 
+首先，`bg` 和 `fg` 指令的输入格式一般都是 `bg/fg pid` 或者 `bg/fg %jid`。因此在调用 `do_bgfg` 函数时，重点需要考察的就是第 1 个参数（这里不考虑有多个参数，因此程序健壮性比较差）
 
+- 如果没有第一个参数，那么直接跳过
+- 如果给出的第一个参数是进程号 `pid`，则根据 `pid` 获取任务 `job`
+- 如果给出的第一个参数是 `jid`，则根据 `jid` 获取任务 `job`
+- 如果给出的第一个参数格式不匹配，则直接跳过
+
+接着根据对应的指令，更改进程的状态：如果是 `bg` 指令，则将进程状态改为 `BG`；如果是 `fg` 指令，则将进程状态改为 `FG`。然后需要用 `SIGCONT` 信号唤醒进程，这里注意在 `kill` 函数中需要使用 `-pid` 来替代 `pid`。最后，如果是 `fg` 指令的话，还需要调用 `waitfg` 来等待前台进程结束。
+
+```c
+void do_bgfg(char **argv)
+{
+    if (argv[1] == NULL) {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+    struct job_t* job;
+    int jid;
+    pid_t pid; 
+    // if argv[1] contains a job id
+    if (sscanf(argv[1], "%%%d", &jid) > 0) {    // `%%%d` -> %jid
+        job = getjobjid(jobs, jid);
+        if (job == NULL) {
+            printf("%%%d: No such job\n", jid);
+            return;
+        }
+    }
+    // if argv[1] contains a process id
+    else if (sscanf(argv[1], "%d", &pid) > 0) {      // `%d` -> pid
+        job = getjobpid(jobs, pid);
+        if (job == NULL) {
+            printf("(%d): No such process\n", pid);
+            return;
+        }
+    }
+    // argument format error: not a job id or process id
+    else {
+        printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+        return;
+    }
+    // change job state according to the input command 
+    if (strcmp(argv[0], "bg") == 0) {
+        job->state = BG;
+    }
+    else if (strcmp(argv[0], "fg") == 0) {
+        job->state = FG;
+    }
+    // using "-pid" instead of "pid" in the argument to the kill function
+    kill(-job->pid, SIGCONT);
+    if (strcmp(argv[0], "bg") == 0) {
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    else if (strcmp(argv[0], "fg") == 0) {
+        waitfg(job->pid);   // only one foreground process allowed
+    }
+    return;
+}
+```
 
 #### 6. `bulitin_cmd` 函数
 
+`bulitin_cmd` 函数的实现逻辑其实很简单，只需要判断相应指令即可。
 
+- `quit` 指令：直接调用 `exit(0)` 退出
+- `fg` 指令和 `bg` 指令：直接调用 `do_bgfg` 函数并且返回 1
+- `jobs` 指令：直接调用 `listjobs` 函数并且返回 1
+- 若非上述内置指令，则返回 0
+
+```c
+int builtin_cmd(char **argv)
+{
+    // quit command
+    if (strcmp(argv[0], "quit") == 0) {
+        exit(0);
+    }
+    // fg command
+    if (strcmp(argv[0], "fg") == 0) {
+        do_bgfg(argv);
+        return 1;
+    }
+    // bg command
+    if (strcmp(argv[0], "bg") == 0) {
+        do_bgfg(argv);
+        return 1;
+    }
+    // jobs command
+    if (strcmp(argv[0], "jobs") == 0) {
+        listjobs(jobs);
+        return 1;
+    }
+    return 0; /* not a builtin command */
+}
+```
 
 #### 7. `eval` 函数
 
+`eval` 函数首先要对命令行 `cmdline` 进行解析 `parseline`，得到参数列表 `argv`，同时判断用户使用的是否为 `BG` 命令。如果命令行为空，则直接返回。当参数列表指示命令行不是内置指令时，则需要创建一个新的子进程来运行指令。
 
+根据文档中的提示，在创建一个新的子进程之间，必须调用 `sigprocmask` 来阻塞 `SIGCHLD` 信号，这是因为父进程需要以这种方式阻止 `SIGCHLD` 信号，以避免出现同步竞争问题。所以使用：
+
+```c
+// initial mask
+sigemptyset(&mask);
+// set SIGCHLD mask
+sigaddset(&mask, SIGCHLD);
+// the parent must use sigprocmask to block SIGCHLD 
+// signals before it forks the child
+sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+```
+
+然后调用 `fork()` 创建子进程。`fork()` 之后，在子进程中执行命令之前，需要调用 `setpgid(0, 0)`，它将子进程放入到一个新的进程组，其组 `id` 与子进程的 `pid` 相同。这样可以确保在前台进程中只有一个进程。并且由于子进程继承了父进程的阻塞向量，因此子进程必须确保在执行新进程之前解除阻塞 `SIGCHLD` 信号。因此在子进程中：
+
+```c
+if (pid == 0) {     // child process
+    // according to workaround, this ensures that there will 
+    // be only one process, your shell, 
+    // in the foreground process group
+    setpgid(0, 0);
+    // Since children inherit the blocked vectors of their parents,
+    // the child must be sure to then unblock SIGCHLD 
+    // signals before it execs the new program.
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+    if (execve(argv[0], argv, environ) < 0) {
+        printf("%s: Command not found\n", argv[0]);
+        exit(0);
+    }
+}
+```
+
+在父进程中，也需要在调用 `addjob` 将子进程加入到工作列表之后调用 `sigprocmask` 来解除阻塞 `SIGCHLD` 信号。因此在父进程中：
+
+```c
+else {  // parent process
+    addjob(jobs, pid, (bg == 1 ? BG : FG), cmdline);
+    // again using sigprocmask after it adds 
+    // the child to the job list by calling addjob
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+
+    if (!bg) {  // if job is FG job
+        waitfg(pid);
+    }
+    else {      // if job is BG job
+        printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
+    }
+} 
+```
 
 #### Shell Lab 结果展示
 
