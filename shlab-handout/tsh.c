@@ -416,11 +416,11 @@ void sigchld_handler(int sig)
         jid = pid2jid(pid);
         job = getjobpid(jobs, pid);
         // judge child process status
-        if (WIFSTOPPED(status)) {
+        if (WIFSTOPPED(status)) {   // suspend
             printf("Job [%d] (%d) stopped by signal %d\n", jid, pid, WSTOPSIG(status));
             job->state = ST;
         }
-        else {
+        else {      // stop
             deletejob(jobs, pid);
             if (WIFSIGNALED(status)) {
                 printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, WTERMSIG(status));
