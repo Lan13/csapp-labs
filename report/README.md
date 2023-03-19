@@ -9,6 +9,7 @@
 在本课程中，我一共完成了下列 2 个实验：
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
+- Bomb Lab：通过逆向工程来拆除炸弹
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
 
 ## 实验环境
@@ -392,15 +393,302 @@ objdump -d bomb > bomb.asm
 
 #### 3. phase 3
 
+首先观察 phase 3 的汇编代码：
 
+```assembly
+0000000000400f43 <phase_3>:
+  400f43:	48 83 ec 18          	sub    $0x18,%rsp
+  400f47:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx
+  400f4c:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx
+  400f51:	be cf 25 40 00       	mov    $0x4025cf,%esi
+  400f56:	b8 00 00 00 00       	mov    $0x0,%eax
+  400f5b:	e8 90 fc ff ff       	callq  400bf0 <__isoc99_sscanf@plt>
+  400f60:	83 f8 01             	cmp    $0x1,%eax
+  400f63:	7f 05                	jg     400f6a <phase_3+0x27>
+  400f65:	e8 d0 04 00 00       	callq  40143a <explode_bomb>
+  400f6a:	83 7c 24 08 07       	cmpl   $0x7,0x8(%rsp)
+  400f6f:	77 3c                	ja     400fad <phase_3+0x6a>
+  400f71:	8b 44 24 08          	mov    0x8(%rsp),%eax
+  400f75:	ff 24 c5 70 24 40 00 	jmpq   *0x402470(,%rax,8)
+  400f7c:	b8 cf 00 00 00       	mov    $0xcf,%eax
+  400f81:	eb 3b                	jmp    400fbe <phase_3+0x7b>
+  400f83:	b8 c3 02 00 00       	mov    $0x2c3,%eax
+  400f88:	eb 34                	jmp    400fbe <phase_3+0x7b>
+  400f8a:	b8 00 01 00 00       	mov    $0x100,%eax
+  400f8f:	eb 2d                	jmp    400fbe <phase_3+0x7b>
+  400f91:	b8 85 01 00 00       	mov    $0x185,%eax
+  400f96:	eb 26                	jmp    400fbe <phase_3+0x7b>
+  400f98:	b8 ce 00 00 00       	mov    $0xce,%eax
+  400f9d:	eb 1f                	jmp    400fbe <phase_3+0x7b>
+  400f9f:	b8 aa 02 00 00       	mov    $0x2aa,%eax
+  400fa4:	eb 18                	jmp    400fbe <phase_3+0x7b>
+  400fa6:	b8 47 01 00 00       	mov    $0x147,%eax
+  400fab:	eb 11                	jmp    400fbe <phase_3+0x7b>
+  400fad:	e8 88 04 00 00       	callq  40143a <explode_bomb>
+  400fb2:	b8 00 00 00 00       	mov    $0x0,%eax
+  400fb7:	eb 05                	jmp    400fbe <phase_3+0x7b>
+  400fb9:	b8 37 01 00 00       	mov    $0x137,%eax
+  400fbe:	3b 44 24 0c          	cmp    0xc(%rsp),%eax
+  400fc2:	74 05                	je     400fc9 <phase_3+0x86>
+  400fc4:	e8 71 04 00 00       	callq  40143a <explode_bomb>
+  400fc9:	48 83 c4 18          	add    $0x18,%rsp
+  400fcd:	c3                   	retq   
+```
+
+首先我们可以看到，程序在一开始调用了 `sscanf` 函数，且其第二个参数的地址为 `0x4025cf`，通过 gdb 我们可以知道：
+
+```
+(gdb) x/s 0x4025cf
+0x4025cf:       "%d %d"
+```
+
+很明显，这是符合 `sscanf` 函数的参数，同时也表明接受的后两个参数是整数。而从汇编代码中也可以知道，第三个参数位于 `0x8(%rsp)` 而第四个参数位于 `0xc(%rsp)`。
+
+当输入符合要求的时候，则会用 `cmpl $0x7,0x8(%rsp)` 判断第一个数字的大小是否不大于 7。当符合要求的时候，接着执行 `mov 0x8(%rsp),%eax` 和 `jmpq *0x402470(,%rax,8)`。这里先通过 gdb 查询 `0x402470` 的含义：
+
+```
+(gdb) x 0x402470
+0x402470:       0x00400f7c
+```
+
+可以发现，这个内存位置存储的正好是 `jmpq *0x402470(,%rax,8)` 下一条指令的地址。
+
+而查询 `0x402478` 的含义：
+
+```
+(gdb) x 0x402478
+0x402478:       0x00400fb9
+```
+
+可以发现，这个内存并不是连续的。
+
+所以不难猜测，这是个**跳转表的方式**，其中 `0x400f7c` 是基地址，而 `%rax` 中存储的值就是索引（即输入的第一个数字）**真正的跳转目标就存在内存 `0x400f7c + 8 * %rax` 当中**。
+
+发现接下来的所有跳转目标都有 `jmp 400fbe <phase_3+0x7b>` 这条指令。而 `0x400fbe` 的指令为 `cmp 0xc(%rsp),%eax`，即将通过跳转后得到的值与输入的第二个值进行比较。那么就可以得到这样的一个跳转对应表：
+
+| 索引 |  跳转地址  | 十六进制 | 十进制 |
+| :--: | :--------: | :------: | :----: |
+|  0   | 0x00400f7c |   0xcf   |  207   |
+|  1   | 0x00400fb9 |  0x137   |  311   |
+|  2   | 0x00400f83 |  0x2c3   |  707   |
+|  3   | 0x00400f8a |  0x100   |  256   |
+|  4   | 0x00400f91 |  0x185   |  389   |
+|  5   | 0x00400f98 |   0xce   |  206   |
+|  6   | 0x00400f9f |  0x2aa   |  682   |
+|  7   | 0x00400fa6 |  0x147   |  327   |
+
+所以只需将 0 和 207 输入，1 和 311 输入等等，即从上面的组合中选取一个即可。
+
+![](image/csapp-bomblab-phase3.png)
 
 #### 4. phase 4
 
+首先观察 phase 4 的汇编代码：
 
+```assembly
+000000000040100c <phase_4>:
+  40100c:	48 83 ec 18          	sub    $0x18,%rsp
+  401010:	48 8d 4c 24 0c       	lea    0xc(%rsp),%rcx
+  401015:	48 8d 54 24 08       	lea    0x8(%rsp),%rdx
+  40101a:	be cf 25 40 00       	mov    $0x4025cf,%esi
+  40101f:	b8 00 00 00 00       	mov    $0x0,%eax
+  401024:	e8 c7 fb ff ff       	callq  400bf0 <__isoc99_sscanf@plt>
+  401029:	83 f8 02             	cmp    $0x2,%eax
+  40102c:	75 07                	jne    401035 <phase_4+0x29>
+  40102e:	83 7c 24 08 0e       	cmpl   $0xe,0x8(%rsp)
+  401033:	76 05                	jbe    40103a <phase_4+0x2e>
+  401035:	e8 00 04 00 00       	callq  40143a <explode_bomb>
+  40103a:	ba 0e 00 00 00       	mov    $0xe,%edx
+  40103f:	be 00 00 00 00       	mov    $0x0,%esi
+  401044:	8b 7c 24 08          	mov    0x8(%rsp),%edi
+  401048:	e8 81 ff ff ff       	callq  400fce <func4>
+  40104d:	85 c0                	test   %eax,%eax
+  40104f:	75 07                	jne    401058 <phase_4+0x4c>
+  401051:	83 7c 24 0c 00       	cmpl   $0x0,0xc(%rsp)
+  401056:	74 05                	je     40105d <phase_4+0x51>
+  401058:	e8 dd 03 00 00       	callq  40143a <explode_bomb>
+  40105d:	48 83 c4 18          	add    $0x18,%rsp
+  401061:	c3                   	retq   
+```
+
+首先前面的部分与 phase 3 中的一样，`sscanf` 会接受两个整数参数，且第一个参数的值需要小于等于 `0xe`。然后可以看到，在调用 `func4` 之前，有对三个参数寄存器的赋值情况：将第一个输入整数赋值到 `%edi`，将 `0x0` 赋值到 `%esi` 和将 `0xe` 赋值到 `%edx`。**当 `func4` 结束返回后检查返回值是否为 0，最后再检查第二个输入整数是否为 0。**
+
+接着再看 `func4` 的汇编代码：
+
+```assembly
+0000000000400fce <func4>:
+  400fce:	48 83 ec 08          	sub    $0x8,%rsp
+  400fd2:	89 d0                	mov    %edx,%eax
+  400fd4:	29 f0                	sub    %esi,%eax
+  400fd6:	89 c1                	mov    %eax,%ecx
+  400fd8:	c1 e9 1f             	shr    $0x1f,%ecx
+  400fdb:	01 c8                	add    %ecx,%eax
+  400fdd:	d1 f8                	sar    %eax
+  400fdf:	8d 0c 30             	lea    (%rax,%rsi,1),%ecx
+  400fe2:	39 f9                	cmp    %edi,%ecx
+  400fe4:	7e 0c                	jle    400ff2 <func4+0x24>
+  400fe6:	8d 51 ff             	lea    -0x1(%rcx),%edx
+  400fe9:	e8 e0 ff ff ff       	callq  400fce <func4>
+  400fee:	01 c0                	add    %eax,%eax
+  400ff0:	eb 15                	jmp    401007 <func4+0x39>
+  400ff2:	b8 00 00 00 00       	mov    $0x0,%eax
+  400ff7:	39 f9                	cmp    %edi,%ecx
+  400ff9:	7d 0c                	jge    401007 <func4+0x39>
+  400ffb:	8d 71 01             	lea    0x1(%rcx),%esi
+  400ffe:	e8 cb ff ff ff       	callq  400fce <func4>
+  401003:	8d 44 00 01          	lea    0x1(%rax,%rax,1),%eax
+  401007:	48 83 c4 08          	add    $0x8,%rsp
+  40100b:	c3                   	retq   
+```
+
+首先从 `phase_4` 的分析中，我们得知 `func4` 的参数为：`func4(input_1, 0x0, 0xe)`。一句句分析，可以对前面的几句得到：
+
+```assembly
+%ecx = %eax = %edx - %esi
+%ecx = (%edx - %esi) >> 31
+%eax = ((%edx - %esi) + (%edx - %esi) >> 31) >> 1
+%ecx = %rax + %rsi
+```
+
+然后比较第一个输入的数 `%edi` 和 `%ecx`。接着发现，会根据不同的比较结果，调用不同的参数进行 `func4` 函数的递归调用。由于递归调用比较难以理解其实际含义，因此尝试将上述汇编代码转变为 C 语言代码（保存为 `func4.c`）：
+
+```c
+unsigned int func4(unsigned int a, unsigned int b, unsigned int c) {
+    unsigned int temp = c - b;
+	temp += temp >> 31;
+	temp >>= 1;
+	temp += b;
+    if (temp > a) {
+        return 2 * func4(a, b, temp - 1);
+    }
+    else if (temp < a) {
+        return 2 * func4(a, temp + 1, c) + 1;
+    }
+    else return 0;
+}
+```
+
+通过循环调用发现：
+
+```c
+for (unsigned int i = 0; i <= 0xe; i++) {
+    printf("func4(%u) reuslt is: %u\n", i, func4(i, 0x0, 0xe));
+}
+```
+
+得到结果为：
+
+```
+func4(0) reuslt is: 0
+func4(1) reuslt is: 0
+func4(2) reuslt is: 4
+func4(3) reuslt is: 0
+func4(4) reuslt is: 2
+func4(5) reuslt is: 2
+func4(6) reuslt is: 6
+func4(7) reuslt is: 0
+func4(8) reuslt is: 1
+func4(9) reuslt is: 1
+func4(10) reuslt is: 5
+func4(11) reuslt is: 1
+func4(12) reuslt is: 3
+func4(13) reuslt is: 3
+func4(14) reuslt is: 7
+```
+
+**所以只有 0，1，3，7 符合要求。**所以最后符合要求的为 **`(0, 0), (1, 0), (3, 0), (7, 0)`**。
+
+![](image/csapp-bomblab-phase4.png)
 
 #### 5. phase 5
 
+首先观察 phase 5 的汇编代码：
 
+```assembly
+0000000000401062 <phase_5>:
+  401062:	53                   	push   %rbx
+  401063:	48 83 ec 20          	sub    $0x20,%rsp
+  401067:	48 89 fb             	mov    %rdi,%rbx
+  40106a:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
+  401071:	00 00 
+  401073:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
+  401078:	31 c0                	xor    %eax,%eax
+  40107a:	e8 9c 02 00 00       	callq  40131b <string_length>
+  40107f:	83 f8 06             	cmp    $0x6,%eax
+  401082:	74 4e                	je     4010d2 <phase_5+0x70>
+  401084:	e8 b1 03 00 00       	callq  40143a <explode_bomb>
+  401089:	eb 47                	jmp    4010d2 <phase_5+0x70>
+  40108b:	0f b6 0c 03          	movzbl (%rbx,%rax,1),%ecx
+  40108f:	88 0c 24             	mov    %cl,(%rsp)
+  401092:	48 8b 14 24          	mov    (%rsp),%rdx
+  401096:	83 e2 0f             	and    $0xf,%edx
+  401099:	0f b6 92 b0 24 40 00 	movzbl 0x4024b0(%rdx),%edx
+  4010a0:	88 54 04 10          	mov    %dl,0x10(%rsp,%rax,1)
+  4010a4:	48 83 c0 01          	add    $0x1,%rax
+  4010a8:	48 83 f8 06          	cmp    $0x6,%rax
+  4010ac:	75 dd                	jne    40108b <phase_5+0x29>
+  4010ae:	c6 44 24 16 00       	movb   $0x0,0x16(%rsp)
+  4010b3:	be 5e 24 40 00       	mov    $0x40245e,%esi
+  4010b8:	48 8d 7c 24 10       	lea    0x10(%rsp),%rdi
+  4010bd:	e8 76 02 00 00       	callq  401338 <strings_not_equal>
+  4010c2:	85 c0                	test   %eax,%eax
+  4010c4:	74 13                	je     4010d9 <phase_5+0x77>
+  4010c6:	e8 6f 03 00 00       	callq  40143a <explode_bomb>
+  4010cb:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  4010d0:	eb 07                	jmp    4010d9 <phase_5+0x77>
+  4010d2:	b8 00 00 00 00       	mov    $0x0,%eax
+  4010d7:	eb b2                	jmp    40108b <phase_5+0x29>
+  4010d9:	48 8b 44 24 18       	mov    0x18(%rsp),%rax
+  4010de:	64 48 33 04 25 28 00 	xor    %fs:0x28,%rax
+  4010e5:	00 00 
+  4010e7:	74 05                	je     4010ee <phase_5+0x8c>
+  4010e9:	e8 42 fa ff ff       	callq  400b30 <__stack_chk_fail@plt>
+  4010ee:	48 83 c4 20          	add    $0x20,%rsp
+  4010f2:	5b                   	pop    %rbx
+  4010f3:	c3                   	retq   
+```
+
+大概阅读了一遍之后，并不能直接理解程序的意图是什么。首先还是分析上面出现的内存值：
+
+```gdb
+(gdb) x/s 0x4024b0
+0x4024b0 <array.3449>:  "maduiersnfotvbylSo you think you can stop the bomb with ctrl-c, do you?"
+(gdb) x/s 0x40245e
+0x40245e:       "flyers"
+```
+
+从开头的 `callq 40131b <string_length>` 和 `cmp $0x6,%eax` 可知，大概率输入串的长度是 6。然后分析到下面，发现有一个循环，根据 `add $0x1,%rax` 和 `cmp $0x6,%rax` 大概率得知是对字符一个个处理。而接下来会有一个 `callq 401338 <strings_not_equal>` 字符串的比较。比较的双方是 `0x10(%rsp)` 和 `flyers`。
+
+所以可以猜测出，上面这个循环会将输入的字符串一个个进行转化。我们的目标是需要让其转换成为 `flyers`。所以需要重点分析该循环：
+
+```assembly
+  40108b:	0f b6 0c 03          	movzbl (%rbx,%rax,1),%ecx
+  40108f:	88 0c 24             	mov    %cl,(%rsp)
+  401092:	48 8b 14 24          	mov    (%rsp),%rdx
+  401096:	83 e2 0f             	and    $0xf,%edx
+  401099:	0f b6 92 b0 24 40 00 	movzbl 0x4024b0(%rdx),%edx
+  4010a0:	88 54 04 10          	mov    %dl,0x10(%rsp,%rax,1)
+  4010a4:	48 83 c0 01          	add    $0x1,%rax
+  4010a8:	48 83 f8 06          	cmp    $0x6,%rax
+  4010ac:	75 dd                	jne    40108b <phase_5+0x29>
+```
+
+首先在程序开始处有 `mov %rdi,%rbx`，接着 `movzbl (%rbx,%rax,1),%ecx` 和 `mov %cl,(%rsp)` 等一系列操作（循环中的操作）将其低 8 位与 `0xf` 进行按位与操作，接着用 `movzbl 0x4024b0(%rdx),%edx` 取到内存中字符串数组相应的值，接着再取低 8 位存到 `0x10(%rsp, %rax, 1)` 中，这里正好与上述中提到的所符合。即该循环经过这些处理变换后，将结果存在起始地址为 `0x10(%rsp)` 的内存当中，再与 `flyers` 进行比较。
+
+`flyers` 在 `maduiersnfotvbyl` 中的索引位置分别为 `9, 15, 14, 5, 6, 7`。那么我们就需要得到这个索引序列，因为这是和 `0xf` 相按位与之后的结果，所以可以选择的结果非常多：
+
+|  9   |  15  |  14  |  5   |  6   |  7   |
+| :--: | :--: | :--: | :--: | :--: | :--: |
+|  )   |  /   |  .   |  %   |  &   |  '   |
+|  9   |  ?   |  >   |  5   |  6   |  7   |
+|  I   |  O   |  N   |  E   |  F   |  G   |
+|  Y   |  _   |  ^   |  U   |  V   |  W   |
+|  i   |  o   |  n   |  e   |  f   |  g   |
+|  y   |      |  ~   |  u   |  v   |  w   |
+
+所以只需要每一列任意选择一个输入即可。
+
+![](image/csapp-bomblab-phase5.png)
 
 #### 6. phase 6
 
