@@ -692,7 +692,178 @@ func4(14) reuslt is: 7
 
 #### 6. phase 6
 
+首先阅读 phase 6 的汇编代码：
 
+```assembly
+00000000004010f4 <phase_6>:
+  4010f4:	41 56                	push   %r14
+  4010f6:	41 55                	push   %r13
+  4010f8:	41 54                	push   %r12
+  4010fa:	55                   	push   %rbp
+  4010fb:	53                   	push   %rbx
+  4010fc:	48 83 ec 50          	sub    $0x50,%rsp
+  401100:	49 89 e5             	mov    %rsp,%r13
+  401103:	48 89 e6             	mov    %rsp,%rsi
+  401106:	e8 51 03 00 00       	callq  40145c <read_six_numbers>
+```
+
+首先还是获取 6 个数字，这与之前的 phase 操作相同。
+
+```assembly
+  40110b:	49 89 e6             	mov    %rsp,%r14
+  40110e:	41 bc 00 00 00 00    	mov    $0x0,%r12d
+  401114:	4c 89 ed             	mov    %r13,%rbp
+  401117:	41 8b 45 00          	mov    0x0(%r13),%eax
+  40111b:	83 e8 01             	sub    $0x1,%eax
+  40111e:	83 f8 05             	cmp    $0x5,%eax
+  401121:	76 05                	jbe    401128 <phase_6+0x34>
+  401123:	e8 12 03 00 00       	callq  40143a <explode_bomb>
+  401128:	41 83 c4 01          	add    $0x1,%r12d
+  40112c:	41 83 fc 06          	cmp    $0x6,%r12d
+  401130:	74 21                	je     401153 <phase_6+0x5f>
+  401132:	44 89 e3             	mov    %r12d,%ebx
+  401135:	48 63 c3             	movslq %ebx,%rax
+  401138:	8b 04 84             	mov    (%rsp,%rax,4),%eax
+  40113b:	39 45 00             	cmp    %eax,0x0(%rbp)
+  40113e:	75 05                	jne    401145 <phase_6+0x51>
+  401140:	e8 f5 02 00 00       	callq  40143a <explode_bomb>
+  401145:	83 c3 01             	add    $0x1,%ebx
+  401148:	83 fb 05             	cmp    $0x5,%ebx
+  40114b:	7e e8                	jle    401135 <phase_6+0x41>
+  40114d:	49 83 c5 04          	add    $0x4,%r13
+  401151:	eb c1                	jmp    401114 <phase_6+0x20>
+  401153:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+```
+
+然后阅读发现在循环当中 `mov 0x0(%r13),%eax` 会取出一个数字，这个数字被取出后，`sub $0x1,%eax` 和 `cmp $0x5,%eax` 会将其大小进行限制，即每个数字的大小都是小于等于 6 的。接下来看到 `add $0x1,%r12d` 和 `cmp $0x6,%r12d`，以及当判断成功时，跳转地址为 `0x401153` 会跳出循环。因此从上面这些指令可以猜测，`%r12d` 的作用是用作计数器来判断什么时候可以检测完这 6 个数字。
+
+接着发现在这个外循环中套着一个内循环：
+
+```assembly
+  401135:	48 63 c3             	movslq %ebx,%rax
+  401138:	8b 04 84             	mov    (%rsp,%rax,4),%eax
+  40113b:	39 45 00             	cmp    %eax,0x0(%rbp)
+  40113e:	75 05                	jne    401145 <phase_6+0x51>
+  401140:	e8 f5 02 00 00       	callq  40143a <explode_bomb>
+  401145:	83 c3 01             	add    $0x1,%ebx
+  401148:	83 fb 05             	cmp    $0x5,%ebx
+  40114b:	7e e8                	jle    401135 <phase_6+0x41>
+```
+
+`mov (%rsp,%rax,4),%eax` 这条指令明显的在获取当前数字后面的输入数字，从这个循环也不难推断，这是判断每个数字是否相同。所以这一个外循环的逻辑大概如下：
+
+```c
+for (int i = 0; i < 6; i++){
+   if (a[i] - 1 > 5) {
+      explode_bomb();
+   }
+   for (int j = i + 1; j <= 5; j++) {
+      if(a[j] == a[i]) {
+         explode_bomb();
+      }
+   }
+}
+```
+
+所以我们目前得知的信息有：**每个数字的大小小于等于 6 且每个数字的大小不相同**。接着：
+
+```assembly
+  401153:	48 8d 74 24 18       	lea    0x18(%rsp),%rsi
+  401158:	4c 89 f0             	mov    %r14,%rax
+  40115b:	b9 07 00 00 00       	mov    $0x7,%ecx
+  401160:	89 ca                	mov    %ecx,%edx
+  401162:	2b 10                	sub    (%rax),%edx
+  401164:	89 10                	mov    %edx,(%rax)
+  401166:	48 83 c0 04          	add    $0x4,%rax
+  40116a:	48 39 f0             	cmp    %rsi,%rax
+  40116d:	75 f1                	jne    401160 <phase_6+0x6c>
+```
+
+这一段代码又用了一个循环将每个数字用 7 - 数字又存回了远处，即逻辑如：
+
+```c
+for(int i = 0; i < 6; i++) {
+    a[i] = 7 - a[i];
+}
+```
+
+接下来后面一段程序的逻辑看起来不明显，但是多次出现了 `0x6032d0` 这个内存地址，那就查看这个内存地址的信息：
+
+```
+(gdb) x 0x6032d0
+0x6032d0 <node1>:       0x0000014c
+(gdb) x/24xw 0x6032d0
+0x6032d0 <node1>:       0x0000014c      0x00000001      0x006032e0      0x00000000
+0x6032e0 <node2>:       0x000000a8      0x00000002      0x006032f0      0x00000000
+0x6032f0 <node3>:       0x0000039c      0x00000003      0x00603300      0x00000000
+0x603300 <node4>:       0x000002b3      0x00000004      0x00603310      0x00000000
+0x603310 <node5>:       0x000001dd      0x00000005      0x00603320      0x00000000
+0x603320 <node6>:       0x000001bb      0x00000006      0x00000000      0x00000000
+```
+
+那么可以推测这段代码与这些数字是密切相关的。
+
+```assembly
+  40116f:	be 00 00 00 00       	mov    $0x0,%esi
+  401174:	eb 21                	jmp    401197 <phase_6+0xa3>
+  401176:	48 8b 52 08          	mov    0x8(%rdx),%rdx
+  40117a:	83 c0 01             	add    $0x1,%eax
+  40117d:	39 c8                	cmp    %ecx,%eax
+  40117f:	75 f5                	jne    401176 <phase_6+0x82>
+  401181:	eb 05                	jmp    401188 <phase_6+0x94>
+  401183:	ba d0 32 60 00       	mov    $0x6032d0,%edx
+  401188:	48 89 54 74 20       	mov    %rdx,0x20(%rsp,%rsi,2)
+  40118d:	48 83 c6 04          	add    $0x4,%rsi
+  401191:	48 83 fe 18          	cmp    $0x18,%rsi
+  401195:	74 14                	je     4011ab <phase_6+0xb7>
+  401197:	8b 0c 34             	mov    (%rsp,%rsi,1),%ecx
+  40119a:	83 f9 01             	cmp    $0x1,%ecx
+  40119d:	7e e4                	jle    401183 <phase_6+0x8f>
+  40119f:	b8 01 00 00 00       	mov    $0x1,%eax
+  4011a4:	ba d0 32 60 00       	mov    $0x6032d0,%edx
+  4011a9:	eb cb                	jmp    401176 <phase_6+0x82>
+```
+
+可以发现这段程序一开始的执行顺序应该是这样的：`40116f -> 401174 ->401197 -> 40119a -> 40119d`，到这里发现，这又当数字小于等于 1 的时候才会跳转，所以这里肯定是一个结束循环的检测条件。而分析得知 `mov $0x6032d0,%edx` 和 `mov %rdx,0x20(%rsp,%rsi,2)` 会修改链表的值，这个值就是链表互相连接的地址。
+
+```assembly
+  4011ab:	48 8b 5c 24 20       	mov    0x20(%rsp),%rbx
+  4011b0:	48 8d 44 24 28       	lea    0x28(%rsp),%rax
+  4011b5:	48 8d 74 24 50       	lea    0x50(%rsp),%rsi
+  4011ba:	48 89 d9             	mov    %rbx,%rcx
+  4011bd:	48 8b 10             	mov    (%rax),%rdx
+  4011c0:	48 89 51 08          	mov    %rdx,0x8(%rcx)
+  4011c4:	48 83 c0 08          	add    $0x8,%rax
+  4011c8:	48 39 f0             	cmp    %rsi,%rax
+  4011cb:	74 05                	je     4011d2 <phase_6+0xde>
+  4011cd:	48 89 d1             	mov    %rdx,%rcx
+  4011d0:	eb eb                	jmp    4011bd <phase_6+0xc9>
+  4011d2:	48 c7 42 08 00 00 00 	movq   $0x0,0x8(%rdx)
+```
+
+而这一段程序则将链表重新连接起来，形成一个新的链表。
+
+```assembly
+  4011da:	bd 05 00 00 00       	mov    $0x5,%ebp
+  4011df:	48 8b 43 08          	mov    0x8(%rbx),%rax
+  4011e3:	8b 00                	mov    (%rax),%eax
+  4011e5:	39 03                	cmp    %eax,(%rbx)
+  4011e7:	7d 05                	jge    4011ee <phase_6+0xfa>
+  4011e9:	e8 4c 02 00 00       	callq  40143a <explode_bomb>
+  4011ee:	48 8b 5b 08          	mov    0x8(%rbx),%rbx
+  4011f2:	83 ed 01             	sub    $0x1,%ebp
+  4011f5:	75 e8                	jne    4011df <phase_6+0xeb>
+```
+
+从这段代码可以看出，`cmp %eax,(%rbx)` 和 `jge 4011ee <phase_6+0xfa>` 要求该序列需要非递增顺序的，而这个序列对应的实际上是链表中的顺序。而对于链表的非递增顺序为：
+
+```
+node3 -> node4 -> node5 -> node6 -> node1 -> node2
+```
+
+由于输入的数据与 7 做过差，因此我们可以得知**输入的数字顺序为：`4 -> 3 -> 2 -> 1 -> 6 -> 5`**。
+
+![](image/csapp-bomblab-phase6.png)
 
 ### Shell Lab
 
