@@ -6,11 +6,12 @@
 
 ## 实验摘要
 
-在本课程中，我一共完成了下列 4 个实验：
+在本课程中，我一共完成了下列 5 个实验：
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
 - Attack Lab：完成代码注入和面向返回编程的攻击
+- Architecture Lab
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
 
 ## 实验环境
@@ -1091,6 +1092,280 @@ fa 18 40 00 00 00 00 00         /* address of touch3 */
 ```
 
 ![](image/csapp-attacklab-rtarget-level2.png)
+
+### Architecture Lab
+
+首先获取实验框架，然后解压：
+
+```bash
+tar -xvf http://csapp.cs.cmu.edu/3e/archlab-handout.tar
+tar -xvf archlab-handout.tar
+rm archlab-handout.tar
+cd archlab
+tar -xvf sim.tar
+rm sim.tar
+cd sim
+```
+
+然后执行 `make` 后会发现：
+
+```bash
+/usr/bin/ld: cannot find -lfl
+collect2: error: ld returned 1 exit status
+```
+
+这时候就需要安装 `flex` 和 `bison`
+
+```bash
+sudo apt install flex bison
+```
+
+同时还会报错：
+
+```
+/usr/bin/ld: cannot find -ltk
+/usr/bin/ld: cannot find -ltcl
+```
+
+这时候需要安装：
+
+```bash
+sudo apt install tk8.6-dev tcl8.6-dev
+```
+
+并且修改 `Makefile` 为：
+
+```makefile
+TKLIBS=-L/usr/lib -ltk8.6 -ltcl8.6
+TKINC=-isystem /usr/include/tcl8.6
+```
+
+但是发现 `make` 后还是会报错，因此将有关的所有有关报错信息进行注释，包括 `interp->result` 和 `matherr`。最后程序便可以运行起来。
+
+#### Part A
+
+part A 部分需要把给出的 c 语言程序转换成为 Y86-64 程序。即用 Y86-64 语言重写这些程序：
+
+```c
+/* sum_list - Sum the elements of a linked list */
+long sum_list(list_ptr ls)
+{
+    long val = 0;
+    while (ls) {
+	val += ls->val;
+	ls = ls->next;
+    }
+    return val;
+}
+
+/* rsum_list - Recursive version of sum_list */
+long rsum_list(list_ptr ls)
+{
+    if (!ls)
+	return 0;
+    else {
+	long val = ls->val;
+	long rest = rsum_list(ls->next);
+	return val + rest;
+    }
+}
+
+/* copy_block - Copy src to dest and return xor checksum of src */
+long copy_block(long *src, long *dest, long len)
+{
+    long result = 0;
+    while (len > 0) {
+	long val = *src++;
+	*dest++ = val;
+	result ^= val;
+	len--;
+    }
+    return result;
+}
+```
+
+- 对于 `sum_list` 函数，可以仿造课本上图 4-8 的例子
+
+  由于给出的链表结构如下：
+
+  ```assembly
+  # Sample linked list
+  .align 8
+  ele1:
+      .quad 0x00a
+      .quad ele2
+  ele2:
+      .quad 0x0b0
+      .quad ele3
+  ele3:
+      .quad 0xc00
+      .quad 0
+  ```
+
+  我们可以知道，链表的首地址就是 `ele1` 所代表的地址，因此在调用 `sum_list` 函数之前，需要将链表地址 `ele1` 作为参数传入到寄存器 `%rdi` 中。在 `sum_list` 函数中，首先将返回值设置为 0，然后对链表是否为空进行判断。这里使用 `andq %rdi, %rdi` 对链表中的地址进行判断，当链表地址为 0 的时候，说明链表结束。而链表的移动可以使用 `mrmovq 8(%rdi), %rdi` 来进行，因此可以得到最后的程序为：
+
+  ```assembly
+  sum_list:
+      xorq %rax, %rax         # set sum = 0
+      jmp test
+  loop:
+      mrmovq 0(%rdi), %r10    # get element
+      addq %r10, %rax         # sum = sum + element
+      mrmovq 8(%rdi), %rdi    # get link list next address
+  test:
+      andq %rdi, %rdi         # set condition code
+      jne loop
+      ret
+  ```
+
+  最后程序的运行结果为：
+
+  ![](image/csapp-archlab-partA-1.png)
+
+  可以看到，最后返回值 `%rax` 为 `0xcba`，为链表元素的和，因此结果是正确的。
+
+- 对于 `rsum_list` 函数，其整体原理是和 `sum_list` 函数是一样的，唯一不同的是 `rsum_list` 函数采用的是递归的方式进行求和。我们知道，在使用递归函数进行计算时，需要保存每个函数中的寄存器信息。从之前的 Y86-64 程序中我们发现，每次调用 `sum_list` 的时候，都需要将链表元素从内存中存储到 `%r10` 寄存器当中。因此在 `rsum_list` 函数中，为了每次能够正确的使用该元素，需要用 `pushq %r10` 将其存到栈中。当递归调用 `rsum_list` 函数结束之后，再将这个值用 `popq %r10` 取出，然后进行求和计算。因此可以得到函数为：
+
+  ```assembly
+  rsum_list:
+      andq %rdi, %rdi         # set condition code
+      jne goahead
+      ret
+  goahead:
+      mrmovq 0(%rdi), %r10    # get element
+      pushq %r10              # store current element, for recursive calling will change %r10
+      mrmovq 8(%rdi), %rdi    # get link list next address
+      call rsum_list          # recursively call
+      popq %r10               # get current call's %r10
+      addq %r10, %rax         # sum return value 
+      ret
+  ```
+
+  其实在这里 `%rdi` 寄存器也是需要进行保存的，但是因为在调用 `rsum_list` 函数之后，我们的程序不再需要使用 `%rdi` 寄存器的值，因此是否保存其并不会影响结果。最后程序运行结果为：
+
+  ![](image/csapp-archlab-partA-2.png)
+
+  可以看到，最后返回值 `%rax` 为 `0xcba`，为链表元素的和，因此结果是正确的。
+
+- 对于 `copy_block` 函数，这个函数的难度也不大。其主要需要处理的两条语句为：
+
+  ```c
+  long val = *src++;
+  *dest++ = val;
+  ```
+
+  这两条语句可以转换为：
+
+  ```assembly
+  mrmovq (%rdi), %r10     # get src value
+  addq %r8, %rdi          # change src address
+  rmmovq %r10, (%rsi)     # move src value to dest
+  addq %r8, %rsi          # change dest address
+  ```
+
+  其中 `%r8` 寄存器中存储的是立即数 8，因为地址的偏移是以 8 字节为单位的。其余部分和之前的内容差异不大，最后的函数为：
+
+  ```assembly
+  copy_block:
+      irmovq $8, %r8          # get constant 8 to change address
+      irmovq $1, %r9          # get constant 1 to change length
+      xorq %rax, %rax         # set result = 0
+      andq %rdx, %rdx         # set condition code 
+      jmp test
+  loop:
+      mrmovq (%rdi), %r10     # get src value
+      addq %r8, %rdi          # change src address
+      rmmovq %r10, (%rsi)     # move src value to dest
+      addq %r8, %rsi          # change dest address
+      xorq %r10, %rax         # modify checksum
+      subq %r9, %rdx          # change length--
+  test:
+      jne loop
+      ret
+  ```
+
+  程序运行的结果为：
+
+  ![](image/csapp-archlab-partA-3.png)
+
+  可以看到，原先 dest 所在的内存地址中的数值全部被替换成了 src 内存中的值，且检验和 `%rax` 的值也是三个数的和，因此程序的运行是正确的。
+
+#### Part B
+
+part B 的主要工作就是拓展 SEQ 处理器以让其支持 `iaddq` 指令。`iaddq` 指令的阶段如下：
+
+|  阶段   |                        `iaddq V, rB`                         |
+| :-----: | :----------------------------------------------------------: |
+|  取指   | $\operatorname{icode:ifun\leftarrow M_1[PC]}$<br />$\operatorname{rA:rB\leftarrow M_1[PC+1]}$<br />$\operatorname{valC\leftarrow M_8[PC+2]}$<br />$\operatorname{valP\leftarrow PC+10}$ |
+|  译码   |            $\operatorname{valB\leftarrow R[rB]}$             |
+|  执行   |          $\operatorname{valE\leftarrow valC+valB}$           |
+|  访存   |                                                              |
+|  写回   |            $\operatorname{R[rB]\leftarrow valE}$             |
+| 更新 PC |              $\operatorname{PC\leftarrow valP}$              |
+
+根据上述处理阶段，因此可以修改 `seq-full.hcl` 的对应部分如下：
+
+```hashicorp
+## Fetch Stage ##
+
+bool instr_valid = icode in 
+	{ INOP, IHALT, IRRMOVQ, IIRMOVQ, IRMMOVQ, IMRMOVQ,
+	       IOPQ, IJXX, ICALL, IRET, IPUSHQ, IPOPQ, IIADDQ };
+
+# Does fetched instruction require a regid byte?
+bool need_regids =
+	icode in { IRRMOVQ, IOPQ, IPUSHQ, IPOPQ, 
+		     IIRMOVQ, IRMMOVQ, IMRMOVQ, IIADDQ };
+
+# Does fetched instruction require a constant word?
+bool need_valC =
+	icode in { IIRMOVQ, IRMMOVQ, IMRMOVQ, IJXX, ICALL, IIADDQ };
+	
+## Decode Stage ##
+
+## What register should be used as the B source?
+word srcB = [
+	icode in { IOPQ, IRMMOVQ, IMRMOVQ, IIADDQ  } : rB;
+	icode in { IPUSHQ, IPOPQ, ICALL, IRET } : RRSP;
+	1 : RNONE;  # Don't need register
+];
+
+## What register should be used as the E destination?
+word dstE = [
+	icode in { IRRMOVQ } && Cnd : rB;
+	icode in { IIRMOVQ, IOPQ, IIADDQ} : rB;
+	icode in { IPUSHQ, IPOPQ, ICALL, IRET } : RRSP;
+	1 : RNONE;  # Don't write any register
+];
+
+## Execute Stage ##
+
+## Select input A to ALU
+word aluA = [
+	icode in { IRRMOVQ, IOPQ } : valA;
+	icode in { IIRMOVQ, IRMMOVQ, IMRMOVQ, IIADDQ } : valC;
+	icode in { ICALL, IPUSHQ } : -8;
+	icode in { IRET, IPOPQ } : 8;
+	# Other instructions don't need ALU
+];
+
+## Select input B to ALU
+word aluB = [
+	icode in { IRMMOVQ, IMRMOVQ, IOPQ, ICALL, 
+		      IPUSHQ, IRET, IPOPQ, IIADDQ } : valB;
+	icode in { IRRMOVQ, IIRMOVQ } : 0;
+	# Other instructions don't need ALU
+];
+
+## Should the condition codes be updated?
+bool set_cc = icode in { IOPQ, IIADDQ };
+```
+
+对于 Memory Stage 和 Program Counter Update 两个阶段来说，程序中不需要做进一步的修改。最后程序的正确性测试如下：
+
+![](image/csapp-archlab-partB-1.png)
+
+![](image/csapp-archlab-partB-2.png)
 
 ### Shell Lab
 
