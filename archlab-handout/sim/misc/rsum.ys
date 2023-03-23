@@ -1,0 +1,42 @@
+# File: rsum.ys
+# Author: Junwei Lan
+# ID: PB20111689
+
+# Execution begins at address 0
+.pos 0x0
+    irmovq stack, %rsp
+    call main
+    halt
+
+# Sample linked list
+.align 8
+ele1:
+    .quad 0x00a
+    .quad ele2
+ele2:
+    .quad 0x0b0
+    .quad ele3
+ele3:
+    .quad 0xc00
+    .quad 0
+
+main:
+    irmovq ele1, %rdi
+    call rsum_list
+    ret
+
+rsum_list:
+    andq %rdi, %rdi         # set condition code
+    jne goahead
+    ret
+goahead:
+    mrmovq 0(%rdi), %r10    # get element
+    pushq %r10              # store current element, for recursive calling will change %r10
+    mrmovq 8(%rdi), %rdi    # get link list next address
+    call rsum_list          # recursively call
+    popq %r10               # get current call's %r10
+    addq %r10, %rax         # sum return value 
+    ret
+
+.pos 0x200
+stack:
