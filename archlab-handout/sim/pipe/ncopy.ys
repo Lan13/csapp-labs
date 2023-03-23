@@ -17,22 +17,43 @@ ncopy:
 ##################################################################
 # You can modify this portion
 	# Loop header
-	xorq %rax,%rax		# count = 0;
-	andq %rdx,%rdx		# len <= 0?
+	xorq %rax, %rax		# count = 0;
+	andq %rdx, %rdx		# len <= 0?
 	jle Done		# if so, goto Done:
+	irmovq $1, %r8
+	andq %rdx, %r8
+	jne first
+Loop2:
+	mrmovq (%rdi), %r10
+	mrmovq 8(%rdi), %r11
+	rmmovq %r10, (%rsi)
+	rmmovq %r11, 8(%rsi)
+	andq %r10, %r10
+	jle next1
+	iaddq $1, %rax
+next1:
+	andq %r11, %r11
+	jle next2
+	iaddq $1, %rax
+next2:
+	iaddq $16, %rdi
+	iaddq $16, %rsi
+	iaddq $-2, %rdx
+test:
+	jg Loop2
+	jmp Done
 
-Loop:
-	mrmovq (%rdi), %r10	# read val from src...
-	rmmovq %r10, (%rsi)	# ...and store it to dst
-	andq %r10, %r10		# val <= 0?
-	jle Npos		# if so, goto Npos:
-	iaddq $1, %rax		# count++
-Npos:
-	iaddq $-1, %rdx		# len--
-	iaddq $8, %rdi		# src++
-	iaddq $8, %rsi		# dst++
-	andq %rdx,%rdx		# len > 0?
-	jg Loop			# if so, goto Loop:
+first:
+	mrmovq (%rdi), %r10
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle next3
+	iaddq $1, %rax
+next3:
+	iaddq $8, %rdi
+	iaddq $8, %rsi
+	iaddq $-1, %rdx
+	jmp test
 ##################################################################
 # Do not modify the following section of code
 # Function epilogue.
