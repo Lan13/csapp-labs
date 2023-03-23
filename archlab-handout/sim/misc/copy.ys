@@ -1,0 +1,47 @@
+# File: copy.ys
+# Author: Junwei Lan
+# ID: PB20111689
+
+# Execution begins at address 0
+.pos 0x0
+    irmovq stack, %rsp
+    call main
+    halt
+
+# Sample linked list
+.align 8
+src:
+    .quad 0x00a
+    .quad 0x0b0
+    .quad 0xc00
+dest:
+    .quad 0x111
+    .quad 0x222
+    .quad 0x333
+
+main:
+    irmovq src, %rdi        # first argument: src
+    irmovq dest, %rsi       # second argument: dest
+    irmovq $3, %rdx         # third argument: memory length
+    call copy_block
+    ret
+
+copy_block:
+    irmovq $8, %r8          # get constant 8 to change address
+    irmovq $1, %r9          # get constant 1 to change length
+    xorq %rax, %rax         # set result = 0
+    andq %rdx, %rdx         # set condition code 
+    jmp test
+loop:
+    mrmovq (%rdi), %r10     # get src value
+    addq %r8, %rdi          # change src address
+    rmmovq %r10, (%rsi)     # move src value to dest
+    addq %r8, %rsi          # change dest address
+    xorq %r10, %rax         # modify checksum
+    subq %r9, %rdx          # change length--
+test:
+    jne loop
+    ret
+
+.pos 0x200
+stack:
