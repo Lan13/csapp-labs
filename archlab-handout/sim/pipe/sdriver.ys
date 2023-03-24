@@ -30,56 +30,161 @@ ncopy:
 ##################################################################
 # You can modify this portion
 	# Loop header
-	xorq %rax, %rax		# count = 0;
-	andq %rdx, %rdx		# len <= 0?
-	jle Done		# if so, goto Done:
-	irmovq $1, %r8
-	andq %rdx, %r8
-	jne first
-Loop2:
-	mrmovq (%rdi), %r10
+	iaddq $-10, %rdx		# if len >= 10, then execute
+	jl root					# else, we judge what len is
+
+Loop10:						# loop unroll for 10
+	mrmovq (%rdi), %r10		# make full use of bubble
 	mrmovq 8(%rdi), %r11
-	rmmovq %r10, (%rsi)
+	mrmovq 16(%rdi), %r12
+	mrmovq 24(%rdi), %r13
+	mrmovq 32(%rdi), %r14
+	rmmovq %r10, (%rsi)		# make full use of bubble
 	rmmovq %r11, 8(%rsi)
-	andq %r10, %r10
+	rmmovq %r12, 16(%rsi)
+	rmmovq %r13, 24(%rsi)
+	rmmovq %r14, 32(%rsi)
+	andq %r10, %r10			# judge val > 0
 	jle next1
-	iaddq $1, %rax
+	iaddq $1, %rax			# count ++
 next1:
 	andq %r11, %r11
 	jle next2
 	iaddq $1, %rax
 next2:
-	iaddq $16, %rdi
-	iaddq $16, %rsi
-	iaddq $-2, %rdx
-test:
-	jg Loop2
-	jmp Done
-
-first:
-	mrmovq (%rdi), %r10
-	rmmovq %r10, (%rsi)
-	andq %r10, %r10
+	andq %r12, %r12
 	jle next3
 	iaddq $1, %rax
 next3:
-	iaddq $8, %rdi
-	iaddq $8, %rsi
+	andq %r13, %r13
+	jle next4
+	iaddq $1, %rax
+next4:
+	andq %r14, %r14
+	jle next5
+	iaddq $1, %rax
+next5:						# next 5 numbers
+	mrmovq 40(%rdi), %r10
+	mrmovq 48(%rdi), %r11
+	mrmovq 56(%rdi), %r12
+	mrmovq 64(%rdi), %r13
+	mrmovq 72(%rdi), %r14
+	rmmovq %r10, 40(%rsi)
+	rmmovq %r11, 48(%rsi)
+	rmmovq %r12, 56(%rsi)
+	rmmovq %r13, 64(%rsi)
+	rmmovq %r14, 72(%rsi)
+	andq %r10, %r10
+	jle next6
+	iaddq $1, %rax
+next6:
+	andq %r11, %r11
+	jle next7
+	iaddq $1, %rax
+next7:
+	andq %r12, %r12
+	jle next8
+	iaddq $1, %rax
+next8:
+	andq %r13, %r13
+	jle next9
+	iaddq $1, %rax
+next9:
+	andq %r14, %r14
+	jle next10
+	iaddq $1, %rax
+next10:
+	iaddq $80, %rdi
+	iaddq $80, %rsi
+	iaddq $-10, %rdx
+	jge Loop10
+	
+root:
+	iaddq $7, %rdx
+	jg label456789
+	jl label012
+	je last3
+label012:
+	iaddq $2, %rdx
+	je last1
 	iaddq $-1, %rdx
-	jmp test
+	je last2
+	ret
+label456789:
+	iaddq $-3, %rdx
+	jg label789
+	je last6
+	iaddq $1, %rdx
+	je last5
+	jl last4
+label789:
+	iaddq $-2, %rdx
+	je last8
+	jl last7
 
-Loop:
-	mrmovq (%rdi), %r10	# read val from src...
-	rmmovq %r10, (%rsi)	# ...and store it to dst
-	andq %r10, %r10		# val <= 0?
-	jle Npos		# if so, goto Npos:
-	iaddq $1, %rax		# count++
-Npos:
-	iaddq $-1, %rdx		# len--
-	iaddq $8, %rdi		# src++
-	iaddq $8, %rsi		# dst++
-	andq %rdx,%rdx		# len > 0?
-	jg Loop			# if so, goto Loop:
+last9:
+	mrmovq 64(%rdi), %r10
+	rmmovq %r10, 64(%rsi)
+	andq %r10, %r10
+last8:
+	mrmovq 56(%rdi), %r10
+	jle next8_2
+	iaddq $1, %rax		# add for last9
+next8_2:
+	rmmovq %r10, 56(%rsi)
+	andq %r10, %r10
+last7:
+	mrmovq 48(%rdi), %r10
+	jle next7_2:
+	iaddq $1, %rax 		# add for last8
+next7_2:
+	rmmovq %r10, 48(%rsi)
+	andq %r10, %r10
+last6:
+	mrmovq 40(%rdi), %r10
+	jle next6_2:
+	iaddq $1, %rax		# add for last7
+next6_2:
+	rmmovq %r10, 40(%rsi)
+	andq %r10, %r10
+last5:
+	mrmovq 32(%rdi), %r10
+	jle next5_2
+	iaddq $1, %rax 		# add for last 6
+next5_2:
+	rmmovq %r10, 32(%rsi)
+	andq %r10, %r10
+last4:
+	mrmovq 24(%rdi), %r10
+	jle next4_2
+	iaddq $1, %rax		# add for last5
+next4_2:
+	rmmovq %r10, 24(%rsi)
+	andq %r10, %r10
+last3:
+	mrmovq 16(%rdi), %r10
+	jle next3_2
+	iaddq $1, %rax		# add for last4
+next3_2:
+	rmmovq %r10, 16(%rsi)
+	andq %r10, %r10
+last2:
+	mrmovq 8(%rdi), %r10
+	jle next2_2
+	iaddq $1, %rax		# add for last3
+next2_2:
+	rmmovq %r10, 8(%rsi)
+	andq %r10, %r10
+last1:
+	mrmovq (%rdi), %r10
+	jle next1_1
+	iaddq $1, %rax 		# add for last2
+next1_1:
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle Done
+	iaddq $1, %rax		# add for last1
+
 ##################################################################
 # Do not modify the following section of code
 # Function epilogue.
