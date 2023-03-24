@@ -11,7 +11,7 @@
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
 - Attack Lab：完成代码注入和面向返回编程的攻击
-- Architecture Lab
+- Architecture Lab：通过修改功能和处理器设计来最小化指令运行数
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
 
 ## 实验环境
@@ -993,7 +993,7 @@ objdump -d level3.o > level3.d
 
 ![](image/csapp-attacklab-ctarget-level3.png)
 
-#### `rtarget` level 1
+#### 4. `rtarget` level 1
 
 `rtarget` 相比之前的 `ctarget` 更难攻击，因为：
 
@@ -1049,7 +1049,7 @@ objdump -d rtarget > rtarget.asm
 
 ![](image/csapp-attacklab-rtarget-level1.png)
 
-#### `rtarget` level 2
+#### 5. `rtarget` level 2
 
 与 `ctarget` level 3 是一样的，我们需要将 cookie 的字符串信息存储在栈上，然后将 cookie 存储的地址发送给 `%rdi` 寄存器。所以我们需要计算 cookie 存储的地址。从之前的经历我们知道，cookie 存储的地址是通过栈顶寄存器 `%rsp` 和一个偏移量相加来完成的。因此，我们需要利用到 gadgets 当中的加法函数，可以在 `farm.c` 中找到 `add_xy()` 这个函数。
 
@@ -1142,7 +1142,7 @@ TKINC=-isystem /usr/include/tcl8.6
 
 但是发现 `make` 后还是会报错，因此将有关的所有有关报错信息进行注释，包括 `interp->result` 和 `matherr`。最后程序便可以运行起来。
 
-#### Part A
+#### 1. Part A
 
 part A 部分需要把给出的 c 语言程序转换成为 Y86-64 程序。即用 Y86-64 语言重写这些程序：
 
@@ -1290,7 +1290,7 @@ long copy_block(long *src, long *dest, long len)
 
   可以看到，原先 dest 所在的内存地址中的数值全部被替换成了 src 内存中的值，且检验和 `%rax` 的值也是三个数的和，因此程序的运行是正确的。
 
-#### Part B
+#### 2. Part B
 
 part B 的主要工作就是拓展 SEQ 处理器以让其支持 `iaddq` 指令。`iaddq` 指令的阶段如下：
 
@@ -1366,6 +1366,307 @@ bool set_cc = icode in { IOPQ, IIADDQ };
 ![](image/csapp-archlab-partB-1.png)
 
 ![](image/csapp-archlab-partB-2.png)
+
+#### 3. Part C
+
+本部分的实验目的是修改 `ncopy.ys` 代码和 `pipe-full.hcl` 文件，使得其运行性能尽可能高。
+
+首先运行测试程序，看看代码框架给出的原始代码的性能如何：
+
+```bash
+./benchmark.pl
+```
+
+![](image/csapp-archlab-partC-bm1-init.png)
+
+可以看出，程序给的初始代码性能非常低，原因在于程序的初始代码中，存在许多低效的操作，从 partB 的部分我们知道，我们为 SEQ 处理器增加一个指令 `iaddq`，使得立即数可以直接与寄存器中的数字相加，这样可以替换原始程序中的 `irmovq` 和 `subq` 或者 `addq` 指令，这样可以提高运行速度，因此修改 `pipe-full.hcl` 文件，为其增加 `iaddq` 指令功能。这里的修改内容和 partB 部分完全一样，因此不再赘述，修改完 `pipe-full.hcl` 文件之后，测试 `iaddq` 是否正确：
+
+```bash
+make psim VERSION=full
+cd ../ptest
+make SIM=../pipe/psim TFLAGS=-i
+```
+
+![](image/csapp-archlab-partC-iaddq.png)
+
+接着修改 `ncopy.ys` 文件，替换为 `iaddq` 指令，添加完成之后：
+
+```assembly
+	xorq %rax,%rax		# count = 0;
+	andq %rdx,%rdx		# len <= 0?
+	jle Done		# if so, goto Done:
+Loop:
+	mrmovq (%rdi), %r10	# read val from src...
+	rmmovq %r10, (%rsi)	# ...and store it to dst
+	andq %r10, %r10		# val <= 0?
+	jle Npos		# if so, goto Npos:
+	iaddq $1, %rax		# count++
+Npos:
+	iaddq $-1, %rdx		# len--
+	iaddq $8, %rdi		# src++
+	iaddq $8, %rsi		# dst++
+	andq %rdx,%rdx		# len > 0?
+	jg Loop			# if so, goto Loop:
+```
+
+替换之后，执行 `./benchmark.pl` 程序测试性能：
+
+![](image/csapp-archlab-partC-bm2-iaddq.png)
+
+可以看出，程序的性能有较大的提升，但是提升后的性能远远不能满足实验要求，因此仍然需要做进一步的优化。因此接下来尝试循环展开 2 次。循环展开是一种程序变换，通过增加每次迭代计算的元素数量，减少循环的迭代次数。因为循环展开可以减少循环变量的索引变换次数和减少条件分支的次数，能够有效的减少处理器中的气泡或者冲突冒险。同时通过循环展开，我们还可以做代码移动，常量传播等操作，因此可以根据指令之间的关联性，做进一步的优化操作。所以接下来首先尝试 2 次循环展开：
+
+```assembly
+	xorq %rax, %rax
+	andq %rdx, %rdx
+	jle Done
+	irmovq $1, %r8
+	andq %rdx, %r8		# odd or even
+	jne first
+Loop2:
+	mrmovq (%rdi), %r10
+	mrmovq 8(%rdi), %r11
+	rmmovq %r10, (%rsi)
+	rmmovq %r11, 8(%rsi)
+	andq %r10, %r10
+	jle next1
+	iaddq $1, %rax
+next1:
+	andq %r11, %r11
+	jle next2
+	iaddq $1, %rax
+next2:
+	iaddq $-2, %rdx
+	iaddq $16, %rdi
+	iaddq $16, %rsi
+test:
+	andq %rdx, %rdx
+	jg Loop2
+	jmp Done
+
+first:
+	mrmovq (%rdi), %r10
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle next3
+	iaddq $1, %rax
+next3:
+	iaddq $-1, %rdx
+	iaddq $8, %rdi
+	iaddq $8, %rsi
+	andq %rdx, %rdx
+	jmp test
+```
+
+上述循环展开的逻辑为：首先判断要复制的长度参数 `%rdx` 是奇数还是偶数（因为做的是 2 路循环展开）。如果长度是奇数的话，让其首先进行一次复制操作，然后再让其进入到 2 路循环中。通过该循环展开，运行测试程序 `./benchmark.pl` 之后查看程序性能：
+
+![](image/csapp-archlab-partC-bm3-unroll2.png)
+
+可以看到，程序性能有非常大的提升，证明了循环展开的有效性以及正确性。发现上述程序中，可以通过代码移动的方式，减少条件码的设置，因此可以将 `%rdx` 的记数变化移动到分支判断之前，这样可以减少 `andq %r10, %r10` 指令的执行次数，这样也能够起到优化程序的作用。
+
+```assembly
+next2:
+	iaddq $16, %rdi
+	iaddq $16, %rsi
+	iaddq $-2, %rdx
+test:
+	jg Loop2
+	jmp Done
+
+first:
+	mrmovq (%rdi), %r10
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle next3
+	iaddq $1, %rax
+next3:
+	iaddq $8, %rdi
+	iaddq $8, %rsi
+	iaddq $-1, %rdx
+	jmp test
+```
+
+代码移动后，运行测试程序 `./benchmark.pl` 之后查看程序性能：
+
+![](image/csapp-archlab-partC-bm4-codemotion.png)
+
+可以看出，程序的提升效果还是挺明显的。由于上述的 2 路展开并不能充分利用数据相关而产生的气泡，因此我们可以使用 4 路展开，通过减少数据相关，提高气泡阶段的硬件利用率，来提高程序的性能：
+
+```assembly
+	xorq %rax, %rax		# count = 0;
+	andq %rdx, %rdx		# len <= 0?
+	jle Done		# if so, goto Done:
+	irmovq $3, %r8
+	andq %rdx, %r8
+	jne first
+Loop2:
+	mrmovq (%rdi), %r10
+	mrmovq 8(%rdi), %r11
+	mrmovq 16(%rdi), %r12
+	mrmovq 24(%rdi), %r13
+	rmmovq %r10, (%rsi)
+	rmmovq %r11, 8(%rsi)
+	rmmovq %r12, 16(%rsi)
+	rmmovq %r13, 24(%rsi)
+	andq %r10, %r10
+	jle next1
+	iaddq $1, %rax
+next1:
+	andq %r11, %r11
+	jle next2
+	iaddq $1, %rax
+next2:
+	andq %r12, %r12
+	jle next3
+	iaddq $1, %rax
+next3:
+	andq %r13, %r13
+	jle next4
+	iaddq $1, %rax
+next4:
+	iaddq $32, %rdi
+	iaddq $32, %rsi
+	iaddq $-4, %rdx
+test:
+	jg Loop2
+	jmp Done
+
+first:
+	mrmovq (%rdi), %r10
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle next
+	iaddq $1, %rax
+next:
+	iaddq $8, %rdi
+	iaddq $8, %rsi
+	iaddq $-1, %rdx
+	iaddq $-1, %r8
+	jg first
+	andq %rdx, %rdx
+	jmp test
+```
+
+上述代码仍然是先判断复制长度 `%rdx` 的大小是否为 4 的倍数。如果是 4 的倍数，则直接进入循环并一直运行下去。如果不是 4 的倍数，则首先让其上限次数为 3 的循环，直到其运行结束之后成为 4 的倍数，然后再进入到主循环之中运行。运行测试程序 `./benchmark.pl` 之后查看程序性能：
+
+![](image/csapp-archlab-partC-bm5-unroll4.png)
+
+可以看到程序性能有一定的提升。按理说，4 路循环的程序性能提升应该不止如此，可能原因就是在于引入 `%r8` 这个新的计数器，导致引入了额外的重复计数器，导致做了些额外的计算。同时在小循环中，仍然存在比较严重的数据相关问题。主循环中的性能提升是毋庸置疑的，因此需要解决小循环中的问题。
+
+因此在保证不超过程序的字节长度限制下，我们采取了 10 路循环展开。同时优化了非整倍数部分的操作。原先的操作是先执行余数部分的循环操作，现在我们先执行主循环，当剩余的循环次数不足 10 次的时候，再依此执行剩余部分的操作。同时，剩余操作也不再采用循环进行，因为其性能会比较低，所以将其依此展开。
+
+现在的问题在于，当剩余的循环次数不足 10 次的时候，该如何判断剩余次数呢？因为剩余次数将会有 `[1 - 9]` 种选择。因此我们不得不依此对其判断。如果采用线性搜索的话，即从 `1` 判断到 `9`，这样的线性搜索的时间复杂度是 $O(n)$。由于判断的时候，是通过大小符号来进行比较的，因此我们可以设计出一个树形结构，以二叉树为基础结构对数据进行判断。这样搜索的时间复杂度就会降到 $O(\log n)$，虽然在这里 $n=10$，但是其比较次数的优化是明显的。因此得到下述树形结构：
+
+![](image/csapp-archlab-partC-search-tree.png)
+
+```assembly
+root:
+	iaddq $7, %rdx
+	jl label012
+	jg label456789
+	je last3
+label012:
+	iaddq $2, %rdx
+	je last1
+	jg last2
+	ret
+label456789:
+	iaddq $-3, %rdx
+	je last6
+	jg label789
+	iaddq $1, %rdx
+	je last5
+	jl last4
+label789:
+	iaddq $-2, %rdx
+	je last8
+	jl last7
+
+last9:
+	mrmovq 64(%rdi), %r10
+	rmmovq %r10, 64(%rsi)
+	andq %r10, %r10
+last8:
+	mrmovq 56(%rdi), %r10
+	jle next8_2
+	iaddq $1, %rax		# add for last9
+next8_2:
+	rmmovq %r10, 56(%rsi)
+	andq %r10, %r10
+last7:
+	mrmovq 48(%rdi), %r10
+	jle next7_2:
+	iaddq $1, %rax 		# add for last8
+next7_2:
+	rmmovq %r10, 48(%rsi)
+	andq %r10, %r10
+last6:
+	mrmovq 40(%rdi), %r10
+	jle next6_2:
+	iaddq $1, %rax		# add for last7
+next6_2:
+	rmmovq %r10, 40(%rsi)
+	andq %r10, %r10
+last5:
+	mrmovq 32(%rdi), %r10
+	jle next5_2
+	iaddq $1, %rax 		# add for last 6
+next5_2:
+	rmmovq %r10, 32(%rsi)
+	andq %r10, %r10
+last4:
+	mrmovq 24(%rdi), %r10
+	jle next4_2
+	iaddq $1, %rax		# add for last5
+next4_2:
+	rmmovq %r10, 24(%rsi)
+	andq %r10, %r10
+last3:
+	mrmovq 16(%rdi), %r10
+	jle next3_2
+	iaddq $1, %rax		# add for last4
+next3_2:
+	rmmovq %r10, 16(%rsi)
+	andq %r10, %r10
+last2:
+	mrmovq 8(%rdi), %r10
+	jle next2_2
+	iaddq $1, %rax		# add for last3
+next2_2:
+	rmmovq %r10, 8(%rsi)
+	andq %r10, %r10
+last1:
+	mrmovq (%rdi), %r10
+	jle next1_1
+	iaddq $1, %rax 		# add for last2
+next1_1:
+	rmmovq %r10, (%rsi)
+	andq %r10, %r10
+	jle Done
+	iaddq $1, %rax		# add for last1
+```
+
+除了上述的搜索树，我们还将剩余次数的循环全部展开了。在展开的时候，我们将剩余 9 次排在最上面，依此往下，这样可以让其顺序执行，使得我们可以跳转到想要次数的分支上，也能够完成相应次数的执行。同时，为了能够充分利用 `mrmovq` 指令和 `rmmovq` 中的气泡，我们将代码进行移动，将上一次分支的值正负判断移动到当前分支来执行（因为是顺序执行的，因此移动代码之后，这段移动后的代码还是会被执行，并不会影响判断减少）。同时通过搜索树的跳转，使得跳转过来之后，条件码的设置能够保证当前分支不会执行上一个分支的值正负判断（即跳转过来之后，由于预先设置过了条件码，所以能够使得 `jle` 分支判断是正确的，从而跳过 `iaddq` 指令）。
+
+通过该搜索树之后，可以发现程序的性能大大提升，但是程序的正确性出现了一些问题：
+
+![](image/csapp-archlab-partC-error.png)
+
+通过思考和观察后发现，是因为上述搜索树中在跳转至 `last2` 的时候，是以条件码大于 0 的条件而跳转的，因此导致我们在跳转到 `last2` 分支的时候，此时的 `jle next2_2` 条件是不满足的，导致 `iaddq $1, %rax` 指令会被执行，而这条指令实际上是为上一个 `last3` 分支而执行的。因此程序的正确性自然会出现错误。为了解决这个错误，我们需要确保在跳转至除了 `last9` 分支以外的所有分支时，都需要保证当前的条件码是小于等于 0 的，这样才能够成功跳过为上一个分支而执行的 `iaddq $1, %rax`，因此对其进行修改如下：
+
+```assembly
+label012:
+	iaddq $2, %rdx
+	je last1
+	iaddq $-1, %rdx
+	je last2
+	ret
+```
+
+运行测试程序 `./benchmark.pl` 之后查看程序性能：
+
+![](image/csapp-archlab-partC-bm6-unroll10-tree-search.png)
+
+可以看到，修改之后的程序正确性以及性能都达到了实验要求。另外，上述的解决方案主要是解决 `ncopy.ys` 中的代码修改，并没有对 `pipe-full.hcl` 的结构进行大规模的修改。事实上，SEQ 流水线的处理器也有不少可以优化的地方。例如分支预测，数据相关的结构和冒险冲突的优化。由于对代码修改足以完成实验要求，因此不再对处理器的结构进行优化。
 
 ### Shell Lab
 
