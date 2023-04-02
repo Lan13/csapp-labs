@@ -48,32 +48,37 @@ int main(int argc, char **argv)  {
 
 void doit(int fd) {
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-    rio_t rio, rio_server;
+    rio_t rio_client, rio_server;
     struct UriInfo u;
 
     /* Read request line and headers */
-    Rio_readinitb(&rio, fd);
-    if (!Rio_readlineb(&rio, buf, MAXLINE))
+    Rio_readinitb(&rio_client, fd);
+    if (!Rio_readlineb(&rio_client, buf, MAXLINE))
         return;
     printf("%s", buf);
     sscanf(buf, "%s %s %s", method, uri, version);
+    // only suopport GET method
     if (strcasecmp(method, "GET")) {
         clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
         return;
     }
 
-    /* Parse URI from GET request */
+    // parse URI from GET request
     parse_uri(uri, &u);
+    // get server fd
     int server_fd = Open_clientfd(u.hostname, u.port);
     Rio_readinitb(&rio_server, server_fd);
 
     char request[MAXLINE];
+    // initial requset line, and use path info
     sprintf(request, "GET %s HTTP/1.0\r\n", u.path);
-    create_request(&rio, request, &u);
-
+    // encapsulate client request
+    create_request(&rio_client, request, &u);
+    // sent encapsulated request to the server
     Rio_writen(server_fd, request, strlen(request));
 
     int cnts = 0;
+    // get response from server and sent to the client
     while ((cnts = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
         Rio_writen(fd, buf, cnts);
     }
@@ -83,47 +88,50 @@ void doit(int fd) {
 
 void parse_uri(char *uri, struct UriInfo *uriinfo) {
     char *ptr_hostname = strstr(uri, "//");
-    if (ptr_hostname) {
+    if (ptr_hostname) {     // find host name
         ptr_hostname = ptr_hostname + 2;
     }
     else {
         ptr_hostname = uri;
     }
 
-    char *ptr_port = strstr(ptr_hostname, ":");
+    char *ptr_port = strstr(ptr_hostname, ":");     // find port numebr
     if (ptr_port) {
-        int port;
+        int port;   // for sscanf port number
         sscanf(ptr_port + 1, "%d%s", &port, uriinfo->path);
-        sprintf(uriinfo->port, "%d", port);
+        sprintf(uriinfo->port, "%d", port);     // store it into uriinfo
         *ptr_port = '\0';
     }
-    else {
+    else {      // port not exist
         char *ptr_path = strstr(ptr_hostname, "/");
-        if (ptr_path) {
+        if (ptr_path) {         // find path
             strcpy(uriinfo->path, ptr_path);
-            strcpy(uriinfo->port, "80");
+            strcpy(uriinfo->port, "80");    // defualt port numebr
             *ptr_path = '\0';
         }
     }
 
-    strcpy(uriinfo->hostname, ptr_hostname);
+    strcpy(uriinfo->hostname, ptr_hostname);    // get final host name
     return;
 }
 
 void create_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
     char buf[MAXLINE];
 
-    while(Rio_readlineb(rio, buf, MAXLINE) > 0) {
+    while(Rio_readlineb(rio, buf, MAXLINE) > 0) {   // read from client
+        // ignore these infos
         if (strstr(buf, "\r\n")) break;
 
         if (strstr(buf, "Host:")) continue;
         if (strstr(buf, "User-Agent:")) continue;
         if (strstr(buf, "Connection:")) continue;
         if (strstr(buf, "Proxy Connection:")) continue;
-
+        
+        // add infos into initial request line
         sprintf(request, "%s%s", request, buf);
     }
 
+    // add the other request headers
     sprintf(request, "%sHost: %s:%s\r\n", request, uriinfo->hostname, uriinfo->port);
     sprintf(request, "%s%s%s%s\r\n", request, user_agent_hdr, conn_hdr, proxy_hdr);
 }
