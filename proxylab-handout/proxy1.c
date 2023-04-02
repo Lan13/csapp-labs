@@ -83,6 +83,7 @@ void doit(int fd) {
         Rio_writen(fd, buf, len);
     }
 
+    Close(server_fd);
     return;
 }
 
