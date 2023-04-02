@@ -6,14 +6,14 @@
 
 ## 实验摘要
 
-在本课程中，我一共完成了下列 5 个实验：
+在本课程中，我一共完成了下列 6 个实验：
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
 - Attack Lab：完成代码注入和面向返回编程的攻击
 - Architecture Lab：通过修改功能和处理器设计来最小化指令运行数
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
-- Proxy Lab：实现一个并发且带缓存的 Web 代理服务
+- Proxy Lab：实现一个并发且带缓存的 Web 代理程序
 
 ## 实验环境
 
@@ -1969,7 +1969,7 @@ sudo apt install net-tools
 
 #### 1. Part I
 
-本节的任务是实现一个简单的串行服务的 Web 代理。虽然学过计算机网络，而且自认为学的不错。但是在这里动手实现一个最简单的代理感觉也很懵，无从下手。
+本节的任务是实现一个简单的顺序服务的 Web 代理。虽然学过计算机网络，而且自认为学的不错。但是在这里动手实现一个最简单的代理感觉也很懵，无从下手。
 
 首先代理的作用如下：
 
@@ -1977,9 +1977,11 @@ sudo apt install net-tools
 - 面对服务器的响应：代理要充当客服端，接收来自服务器的响应，再将响应转发给客户端
 
 首先面对每个客户端的请求，我们需要解析客户端的请求。我们知道，一个 HTTP 请求的组成如下：
+
 $$
 \rm{method}\quad\rm{URI}\quad\rm{version}
 $$
+
 我们需要使用 `parse_uri` 函数来解析客户端的请求。其中 URI 是相应的 URL 的后缀，包括文件名和可选的参数。我们需要考虑 URI 的组成形式，URI 的形式可能如 `http://www.cmu.edu:8080/hub/index.html`，即包括主机名 `www.cmu.edu`，端口号 `8080` 和路径 `/hub/index.html`。
 
 因此为了存储一个 URI 的信息，我们定义了如下的数据结构：
@@ -2112,18 +2114,57 @@ void doit(int fd) {
     // sent encapsulated request to the server
     Rio_writen(server_fd, request, strlen(request));
 
-    int cnts = 0;
+    int len = 0;
     // get response from server and sent to the client
-    while ((cnts = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
-        Rio_writen(fd, buf, cnts);
+    while ((len = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
+        Rio_writen(fd, buf, len);
     }
 
     return;
 }
 ```
 
- 完成了上述的处理操作，便可以完成简单的 Web 代理。（其余函数的实现内容和课本基本一致）
+完成了上述的处理操作，便可以完成简单的 Web 代理。（其余函数的实现内容和课本基本一致）
 
 运行测评脚本后的结果如下：
 
 ![](image/csapp-proxylab-part1.png)
+
+#### 2. Part II
+
+在这一部分，我们的目标是实现一个能够进行并发处理的 Web Proxy 程序。在上一部分的实现中，我们完成了顺序处理，而顺序处理的逻辑主要在 `main` 函数中实现，因此我们只需要对上一部分的 `main` 函数进行适当修改即可完成并发处理的目的。
+
+为了实现并发功能，我们采用 Posix 线程标准接口来实现。因为主要的代码实际上在书上已经给出，因此下面主要叙述这样做的目的。
+
+首先在程序的主线程中，每当监听到一个连接请求的时候，就为每一个客户端的连接请求分配一个线程进行处理。其中对等线程中的处理程序，即线程例程的设计如下：
+
+```c
+void *thread(void *varge) {
+    int connfd = *((int *) varge);
+    Pthread_detach(pthread_self());
+    Free(varge);
+    doit(connfd);
+    Close(connfd);
+    return NULL;
+}
+```
+
+一个高性能 Web 服务器可能在每次收到 Web 浏览器的连接请求时都会创建一个新的对等线程。因为每个连接都是由一个单独的线程独立处理的，所以对于服务器而言，就没有必要显示地等待每个对等线程终止。在这种情况下，每个对等线程都应该在它开始处理请求之前分离它自身，即 `Pthread_detach(pthread_self());` ，这样就能够在它终止后自动回收它的内存资源了。
+
+```c
+while (1) {
+    clientlen = sizeof(clientaddr);
+    connfd_ptr = Malloc(sizeof(int));
+    *connfd_ptr = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
+                port, MAXLINE, 0);
+    printf("Accepted connection from (%s, %s)\n", hostname, port);
+    Pthread_create(&tid, NULL, thread, connfd_ptr);
+}
+```
+
+因为线程的代码和本地数据是被封装在线程例程当中的，因此其原型中都会以一个通用指针作为输入，并且返回一个通用指针。为了能够将以连接描述符传递给对等程序，我们需要传递这个已连接描述符的指针。而因为这个数据是会被封装到线程例程当中的，如果只采用一个已连接描述符（即只用 `malloc` 分配一个已连接描述符的地址空间），那么就会导致多个对等线程在同一个已连接描述符上执行输入和输出。为了避免这种潜在的致命和竞争，我们必须将 `accept` 函数返回的每个已连接描述符分配到它自己的动态分配的内存块，因此需要在循环中为每一个已连接描述符分配一块地址空间。
+
+完成了上述的处理操作，运行测评脚本后的结果如下：
+
+![](image/csapp-proxylab-part2.png)
