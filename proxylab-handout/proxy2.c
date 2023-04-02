@@ -18,7 +18,7 @@ struct UriInfo {
 
 void doit(int fd);
 void parse_uri(char *uri, struct UriInfo *uriinfo);
-void create_request(rio_t *client, char *request, struct UriInfo *uriinfo);
+void encapsulate_request(rio_t *client, char *request, struct UriInfo *uriinfo);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 void *thread(void *varge);
 
@@ -84,7 +84,7 @@ void doit(int fd) {
     // initial requset line, and use path info
     sprintf(request, "GET %s HTTP/1.0\r\n", u.path);
     // encapsulate client request
-    create_request(&rio_client, request, &u);
+    encapsulate_request(&rio_client, request, &u);
     // sent encapsulated request to the server
     Rio_writen(server_fd, request, strlen(request));
 
@@ -126,7 +126,7 @@ void parse_uri(char *uri, struct UriInfo *uriinfo) {
     return;
 }
 
-void create_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
+void encapsulate_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
     char buf[MAXLINE];
 
     while(Rio_readlineb(rio, buf, MAXLINE) > 0) {   // read from client
