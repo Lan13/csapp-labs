@@ -13,6 +13,7 @@
 - Attack Lab：完成代码注入和面向返回编程的攻击
 - Architecture Lab：通过修改功能和处理器设计来最小化指令运行数
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
+- Proxy Lab：实现一个并发且带缓存的 Web 代理服务
 
 ## 实验环境
 
@@ -1952,3 +1953,177 @@ diff tsh.out tshref.out >> diff.out
 
 可以看出 `tsh.out` 和 `tshref.out` 之间只有 `/bin/ps` 的运行结果有较大差别，但这是不可避免的。并且可以看出程序 `tsh` 执行 `/bin/ps` 的输出是正常的（只是因为我的实验环境在 WSL 中，而多出了许多无关的内容），因此可以认为 `tsh` 的行为与 `tshref` 达到了一致，因此符合实验要求。
 
+### Proxy Lab
+
+当运行测评脚本 `./driver.sh` 的时候，会遇到如下的报错：
+
+```bash
+./driver.sh: line 117: netstat: command not found
+```
+
+解决方案是安装 `net-tool` 包：
+
+```bash
+sudo apt install net-tools
+```
+
+#### 1. Part I
+
+本节的任务是实现一个简单的串行服务的 Web 代理。虽然学过计算机网络，而且自认为学的不错。但是在这里动手实现一个最简单的代理感觉也很懵，无从下手。
+
+首先代理的作用如下：
+
+- 面对客户端的请求：代理要充当服务器，接收来自客户端的请求，再将请求重新封装后转发给服务器
+- 面对服务器的响应：代理要充当客服端，接收来自服务器的响应，再将响应转发给客户端
+
+首先面对每个客户端的请求，我们需要解析客户端的请求。我们知道，一个 HTTP 请求的组成如下：
+$$
+\rm{method}\quad\rm{URI}\quad\rm{version}
+$$
+我们需要使用 `parse_uri` 函数来解析客户端的请求。其中 URI 是相应的 URL 的后缀，包括文件名和可选的参数。我们需要考虑 URI 的组成形式，URI 的形式可能如 `http://www.cmu.edu:8080/hub/index.html`，即包括主机名 `www.cmu.edu`，端口号 `8080` 和路径 `/hub/index.html`。
+
+因此为了存储一个 URI 的信息，我们定义了如下的数据结构：
+
+```c
+struct UriInfo {
+    char hostname[MAXLINE];
+    char port[MAXLINE];
+    char path[MAXLINE];
+};
+```
+
+在实现 `parse_uri` 函数的时候，我们必须要考虑相应的部分是否存在。例如主机名是否存在，端口号是否存在以及路径是否存在。我们主要通过找 uri 中特殊的部分来完成解析，具体的实现如下：
+
+```c
+void parse_uri(char *uri, struct UriInfo *uriinfo) {
+    char *ptr_hostname = strstr(uri, "//");
+    if (ptr_hostname) {     // find host name
+        ptr_hostname = ptr_hostname + 2;
+    }
+    else {
+        ptr_hostname = uri;
+    }
+
+    char *ptr_port = strstr(ptr_hostname, ":");     // find port numebr
+    if (ptr_port) {
+        int port;   // for sscanf port number
+        sscanf(ptr_port + 1, "%d%s", &port, uriinfo->path);
+        sprintf(uriinfo->port, "%d", port);     // store it into uriinfo
+        *ptr_port = '\0';
+    }
+    else {      // port not exist
+        char *ptr_path = strstr(ptr_hostname, "/");
+        if (ptr_path) {         // find path
+            strcpy(uriinfo->path, ptr_path);
+            strcpy(uriinfo->port, "80");    // defualt port numebr
+            *ptr_path = '\0';
+        }
+    }
+
+    strcpy(uriinfo->hostname, ptr_hostname);    // get final host name
+    return;
+}
+```
+
+我们需要在代理程序 `doit` 函数中完成解析之后，调用 `create_request` 函数接收来自客户端的消息，并且对其完成重新封装：
+
+```c
+void create_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
+    char buf[MAXLINE];
+
+    while(Rio_readlineb(rio, buf, MAXLINE) > 0) {   // read from client
+        // ignore these infos
+        if (strstr(buf, "\r\n")) break;
+
+        if (strstr(buf, "Host:")) continue;
+        if (strstr(buf, "User-Agent:")) continue;
+        if (strstr(buf, "Connection:")) continue;
+        if (strstr(buf, "Proxy Connection:")) continue;
+        
+        // add infos into initial request line
+        sprintf(request, "%s%s", request, buf);
+    }
+
+    // add the other request headers
+    sprintf(request, "%sHost: %s:%s\r\n", request, uriinfo->hostname, uriinfo->port);
+    sprintf(request, "%s%s%s%s\r\n", request, user_agent_hdr, conn_hdr, proxy_hdr);
+}
+```
+
+其中为了对其完成重新封装，我们除了 `user_agent_hdr` 还需要加上 `conn_hdr` 和 `proxy_hdr` 的表头信息：
+
+```c
+static const char *conn_hdr = "Connection: close\r\n";
+static const char *proxy_hdr = "Proxy-Connection: close\r\n";
+```
+
+这样我们就完成了对客户的请求重封装，为其增加了：
+
+- Host header
+- User-Agent header
+- Connection header
+- Proxy-Connection header
+
+接着代理需要将这些重封装后的客户端请求发送给服务器：
+
+```c
+Rio_writen(server_fd, request, strlen(request));
+```
+
+发送之后，这时候代理就需要充当客户端的角色，从服务器那里读取响应，然后将这些响应信息转发给客户端：
+
+```c
+while ((cnts = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
+    Rio_writen(fd, buf, cnts);
+}
+```
+
+所以代理的处理函数 `doit` 如下：
+
+```c
+void doit(int fd) {
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    rio_t rio_client, rio_server;
+    struct UriInfo u;
+
+    /* Read request line and headers */
+    Rio_readinitb(&rio_client, fd);
+    if (!Rio_readlineb(&rio_client, buf, MAXLINE))
+        return;
+    printf("%s", buf);
+    sscanf(buf, "%s %s %s", method, uri, version);
+    // only suopport GET method
+    if (strcasecmp(method, "GET")) {
+        clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
+        return;
+    }
+
+    // parse URI from GET request
+    parse_uri(uri, &u);
+    // get server fd
+    int server_fd = Open_clientfd(u.hostname, u.port);
+    Rio_readinitb(&rio_server, server_fd);
+
+    char request[MAXLINE];
+    // initial requset line, and use path info
+    sprintf(request, "GET %s HTTP/1.0\r\n", u.path);
+    // encapsulate client request
+    create_request(&rio_client, request, &u);
+    // sent encapsulated request to the server
+    Rio_writen(server_fd, request, strlen(request));
+
+    int cnts = 0;
+    // get response from server and sent to the client
+    while ((cnts = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
+        Rio_writen(fd, buf, cnts);
+    }
+
+    return;
+}
+```
+
+ 完成了上述的处理操作，便可以完成简单的 Web 代理。（其余函数的实现内容和课本基本一致）
+
+运行测评脚本后的结果如下：
+
+![](image/csapp-proxylab-part1.png)
