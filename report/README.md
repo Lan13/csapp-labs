@@ -1955,6 +1955,14 @@ diff tsh.out tshref.out >> diff.out
 
 ### Proxy Lab
 
+首先获取实验框架，然后解压：
+
+```bash
+wget http://csapp.cs.cmu.edu/3e/proxylab-handout.tar
+tar -xvf proxylab-handout.tar
+rm proxylab-handout.tar
+```
+
 当运行测评脚本 `./driver.sh` 的时候，会遇到如下的报错：
 
 ```bash
@@ -2027,10 +2035,10 @@ void parse_uri(char *uri, struct UriInfo *uriinfo) {
 }
 ```
 
-我们需要在代理程序 `doit` 函数中完成解析之后，调用 `create_request` 函数接收来自客户端的消息，并且对其完成重新封装：
+我们需要在代理程序 `doit` 函数中完成解析之后，调用 `encapsulate_request` 函数接收来自客户端的消息，并且对其完成重新封装：
 
 ```c
-void create_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
+void encapsulate_request(rio_t *rio, char *request, struct UriInfo *uriinfo) {
     char buf[MAXLINE];
 
     while(Rio_readlineb(rio, buf, MAXLINE) > 0) {   // read from client
@@ -2075,8 +2083,8 @@ Rio_writen(server_fd, request, strlen(request));
 发送之后，这时候代理就需要充当客户端的角色，从服务器那里读取响应，然后将这些响应信息转发给客户端：
 
 ```c
-while ((cnts = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
-    Rio_writen(fd, buf, cnts);
+while ((len = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
+    Rio_writen(fd, buf, len);
 }
 ```
 
@@ -2110,7 +2118,7 @@ void doit(int fd) {
     // initial requset line, and use path info
     sprintf(request, "GET %s HTTP/1.0\r\n", u.path);
     // encapsulate client request
-    create_request(&rio_client, request, &u);
+    encapsulate_request(&rio_client, request, &u);
     // sent encapsulated request to the server
     Rio_writen(server_fd, request, strlen(request));
 
@@ -2168,3 +2176,166 @@ while (1) {
 完成了上述的处理操作，运行测评脚本后的结果如下：
 
 ![](image/csapp-proxylab-part2.png)
+
+#### 3. Part III
+
+在本次实验的最后部分中，我们需要为这个 Web 代理程序添加缓存功能，将最近使用过的 Web 对象存储在缓存中。本实验要求我们实现很简单的缓存，当我们的代理从服务器接收到 Web 对象的时候，应该将其存储在缓存当中。当缓存的空间已满时，可以使用 LRU 替换策略来替换出最近最少使用的 Web 对象，从而将新接收到的 Web 对象存储在缓存当中。而当任意客户端向服务器发起请求相同对象的时候，客户端不必与服务器进行套接字连接。客户端可以直接从缓存中读取请求的对象。
+
+因此，在代理程序 `doit` 当中，我们要在客户端调用 `open_clientfd` 函数与服务器进行连接之前进行访问缓存，当访问成功的时候，就可以直接返回，而不必进行后续操作。
+
+```c
+void doit(int fd) {
+    ......
+
+    // read from cache
+    char uri_temp[MAXLINE];
+    strcpy(uri_temp, uri);
+    if (read_cache(fd, uri_temp)) {
+        return;
+    }
+
+    // parse URI from GET request
+    parse_uri(uri, &u);
+    // get server fd
+    int server_fd = Open_clientfd(u.hostname, u.port);
+    Rio_readinitb(&rio_server, server_fd);
+
+    ......
+}
+```
+
+注意到，在这里使用了一个 `uri_temp` 复制了 `uri` 的一个副本。这是因为我们在访问缓存的过程中，`uri` 是作为一个查询的关键字，它用来指示我们请求对象是否已经存在于缓存当中。而在后面的 `parse_uri` 当中，`uri` 可能会因此改变，因此我们需要为其建立一个副本，以保证程序的正确性。因此在这里我们在调用 `read_cache` 和 `write_cache` 函数的使用，使用的参数都是 `uri_temp`，这是为了保证写缓存和读缓存的一致性。
+
+在介绍完读缓存 `read_cache` 函数之后，下面介绍 `write_cache` 函数。因为当我们的代理从服务器接收到 Web 对象的时候，应该将其存储在缓存当中，所以这里很明确了我们需要在接收到服务器的响应之后再进行写缓存操作。因此在代理程序 `doit` 中，我们在从服务器那里接收到响应之后再进行写缓存：
+
+```c
+void doit(int fd) {
+    ......
+
+    int len = 0;
+    int object_len = 0;
+    char object_buf[MAX_OBJECT_SIZE];
+    // get response from server and sent to the client
+    while ((len = Rio_readlineb(&rio_server, buf, MAXLINE)) > 0) {
+        Rio_writen(fd, buf, len);
+
+        // calculate object buf size
+        if (object_len + len < MAX_OBJECT_SIZE) {
+            strcpy(object_buf + object_len, buf);
+            object_len += len;
+        }
+    }
+
+    // write to cache
+    if (object_len < MAX_OBJECT_SIZE) {
+        write_cache(object_buf, uri_temp);
+    }
+
+    Close(server_fd);
+    return;
+}
+```
+
+因为缓存的存储容量是有限的，因此我们需要记录服务器返回的对象的数据大小，再确保对象的数据大小不超过缓存的容量的时候，再确定它可以进行写缓存操作。注意这里用来写缓存的关键字也是 `uri_temp`。
+
+接下来介绍缓存 `struct Cache` 的具体设计，以及读缓存 `read_cache` 和写缓存 `write_cache` 的具体操作。
+
+```c
+struct Cache
+{
+    char uri[MAXLINE];
+    char content[MAX_OBJECT_SIZE];
+    int is_used;
+    int cnt;
+};
+```
+
+缓存中设有 4 个字段：
+
+- `uri` 字段是用来查询网页对象的关键字，当客户端读缓存的时候，如果 `uri` 是匹配的，则说明缓存已经存储过相应的对象
+- `content` 字段是用来存储网页对象的地方，设置其大小为 `MAX_OBJECT_SIZE`
+- `is_used` 字段用来指示当前缓存是否为空，即当前缓存是否使用
+- `cnt` 字段用来指示当前缓存中存储的网页对象最近被请求过多少次，LRU 替换策略主要根据该字段进行替换
+
+接下来介绍 `read_cache` 和 `write_cache`。读缓存和写缓存实际上是一个读者-写者问题。在现在这个多线程缓存 Web 代理中，无限多个线程可以从共享对象缓存中取出已有的对象，但是任何向缓存中写入一个新对象的线程必须拥有独占的访问。
+
+在书上给出了第一类读者-写者解答。在读者程序中，信号量 `reader_mutex` 用来保护对共享变量 `reader_cnt` 的访问，`reader_cnt` 用来统计当前在临界区中的读者数量 。同时只有第一个进入临界区的读者才会对 `writer_mutex` 进行加锁，而只有当最后一个离开临界区的读者才会对 `writer_mutex` 进行解锁。当一个读者进入和离开临界区的时候，如果还有其它读者在临界区中，那么这个读者会忽略互斥锁 `writer_mutex`，无限多数量的读者可以没有障碍地进入临界区。根据课本上的代码示例：
+
+```c
+int read_cache(int fd, char *uri) {
+    // if object read from cache, return 1
+    int read_from_cache = 0;
+
+    P(&reader_mutex);
+    reader_cnt++;
+    if (reader_cnt == 1) {  /* First in */
+        P(&writer_mutex);
+    }
+    V(&reader_mutex);
+
+    /* Critical section */
+    /* Reading happens */
+
+    for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
+        if (cache[i].is_used && (strcmp(uri, cache[i].uri) == 0)) {
+            read_from_cache = 1;
+            // return cache object
+            Rio_writen(fd, cache[i].content, MAX_OBJECT_SIZE);
+            // recently used counter
+            cache[i].cnt++;
+            break;
+        }
+    }
+
+    /* Critical section */
+    P(&reader_mutex);
+    reader_cnt--;
+    if (reader_cnt == 0) {  /* Last out */
+        V(&writer_mutex);
+    }
+    V(&reader_mutex);
+
+    return read_from_cache;
+}
+```
+
+在临界区当中，我们通过顺序查询的方式，一个个比较关键字 `uri` 的值，判断缓存中是否存在相应的请求对象。当发现缓存中存在相应的亲戚请求对象的时候，就将其直接返回给客户端，即通过文件描述符 `fd`，直接将缓存中的对象返回给客户端。同时我们还需要更新对象被请求的次数  `cache[i].cnt`。
+
+对于写者程序，每当一个写者进入到临界区时，它会对互斥锁 `writer_mutex` 进行枷锁，而当其离开临界区的时候，会对 `writer_mutex` 进行解锁。这就保证了任意时刻临界区中最多只有一个写者。根据课本上的代码示例：
+
+```c
+void write_cache(char *buf, char *uri) {
+    int min_cnt = cache[0].cnt;
+    int eviction_position = 0;
+
+    P(&writer_mutex);
+
+    /* Critical section */
+    /* Writing happens */
+
+    for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
+        if (cache[i].is_used == 0) {    // find an empty cache
+            eviction_position = i;
+            break;
+        }
+        if (cache[i].cnt < min_cnt) {   // evict the least used objects
+            eviction_position = i;
+            min_cnt = cache[i].cnt;
+        }
+    }
+    strcpy(cache[eviction_position].uri, uri);
+    strcpy(cache[eviction_position].content, buf);
+    cache[eviction_position].cnt = 0;
+    cache[eviction_position].is_used = 1;
+
+    /* Critical section */
+    V(&writer_mutex);
+    return;
+}
+```
+
+在临界区中，通过顺序查询的方式，首先判断缓存中是否有空的地方，这个时候说明缓存并未完全占用，因此此时将服务器返回的对象数据写到缓存中第一个为空的地方。其次，如果缓存中所有位置都已经存放了某个对象，此时就可以通过 LRU 替换策略，将最近最少使用的对象数据替换出来，并且重置 `cnt` 和 `is_uesd` 字段。
+
+至此，整个实验程序介绍完毕。运行测评脚本后的结果如下：
+
+![](image/csapp-proxylab-part3.png)
