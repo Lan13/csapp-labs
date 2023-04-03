@@ -18,7 +18,7 @@ struct UriInfo {
     char path[MAXLINE];
 };
 
-typedef struct Cache
+struct Cache
 {
     char uri[MAXLINE];
     char content[MAX_OBJECT_SIZE];
@@ -95,72 +95,68 @@ void cache_init() {
 }
 
 int read_cache(int fd, char *uri) {
-    while (1) {
-        // if object read from cache, return 1
-        int read_from_cache = 0;
+    // if object read from cache, return 1
+    int read_from_cache = 0;
 
-        P(&reader_mutex);
-        reader_cnt++;
-        if (reader_cnt == 1) {  /* First in */
-            P(&writer_mutex);
-        }
-        V(&reader_mutex);
-
-        /* Critical section */
-        /* Reading happens */
-
-        for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
-            if (cache[i].is_used && (strcmp(uri, cache[i].uri) == 0)) {
-                read_from_cache = 1;
-                // return cache object
-                Rio_writen(fd, cache[i].content, MAX_OBJECT_SIZE);
-                // recently used counter
-                cache[i].cnt++;
-                break;
-            }
-        }
-
-        /* Critical section */
-        P(&reader_mutex);
-        reader_cnt--;
-        if (reader_cnt == 0) {  /* Last out */
-            V(&writer_mutex);
-        }
-        V(&reader_mutex);
-
-        return read_from_cache;
+    P(&reader_mutex);
+    reader_cnt++;
+    if (reader_cnt == 1) {  /* First in */
+        P(&writer_mutex);
     }
+    V(&reader_mutex);
+
+    /* Critical section */
+    /* Reading happens */
+
+    for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
+        if (cache[i].is_used && (strcmp(uri, cache[i].uri) == 0)) {
+            read_from_cache = 1;
+            // return cache object
+            Rio_writen(fd, cache[i].content, MAX_OBJECT_SIZE);
+            // recently used counter
+            cache[i].cnt++;
+            break;
+        }
+    }
+
+    /* Critical section */
+    P(&reader_mutex);
+    reader_cnt--;
+    if (reader_cnt == 0) {  /* Last out */
+        V(&writer_mutex);
+    }
+    V(&reader_mutex);
+
+    return read_from_cache;
 }
 
 void write_cache(char *buf, char *uri) {
-    while (1) {
-        int min_cnt = cache[0].cnt;
-        int eviction_position = 0;
+    int min_cnt = cache[0].cnt;
+    int eviction_position = 0;
 
-        P(&writer_mutex);
+    P(&writer_mutex);
 
-        /* Critical section */
-        /* Writing happens */
+    /* Critical section */
+    /* Writing happens */
 
-        for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
-            if (cache[i].is_used == 0) {    // find an empty cache
-                eviction_position = i;
-                break;
-            }
-            if (cache[i].cnt < min_cnt) {   // evict the least used objects
-                eviction_position = i;
-                min_cnt = cache[i].cnt;
-            }
+    for (int i = 0; i < MAX_OBJECT_NUMBER; i++) {
+        if (cache[i].is_used == 0) {    // find an empty cache
+            eviction_position = i;
+            break;
         }
-        strcpy(cache[eviction_position].uri, uri);
-        strcpy(cache[eviction_position].content, buf);
-        cache[eviction_position].cnt = 0;
-        cache[eviction_position].is_used = 1;
-
-        /* Critical section */
-        V(&writer_mutex);
-        return;
+        if (cache[i].cnt < min_cnt) {   // evict the least used objects
+            eviction_position = i;
+            min_cnt = cache[i].cnt;
+        }
     }
+    strcpy(cache[eviction_position].uri, uri);
+    strcpy(cache[eviction_position].content, buf);
+    cache[eviction_position].cnt = 0;
+    cache[eviction_position].is_used = 1;
+
+    /* Critical section */
+    V(&writer_mutex);
+    return;
 }
 
 void doit(int fd) {
