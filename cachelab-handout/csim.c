@@ -10,9 +10,9 @@
 #include "cachelab.h"
 
 struct CacheLine {
-    int valid;
-    int tag;
-    int cnt;
+    int valid;  // valid bit
+    int tag;    // tag  bits
+    int cnt;    // LRU counter
 };
 
 struct Result {
@@ -80,9 +80,9 @@ struct CacheLine **create_cache(int s, int E) {
     for (int i = 0; i < S; i++) {
         cache[i] = (struct CacheLine*)malloc(sizeof(struct CacheLine) * E);
         for (int j = 0; j < E; j++) {
-            cache[i][j].valid = 0;
-            cache[i][j].tag = -1;
-            cache[i][j].cnt = 0;
+            cache[i][j].valid = 0;  // valid bit
+            cache[i][j].tag = -1;   // tag bits
+            cache[i][j].cnt = 0;    // LRU counter
         }
     }
     return cache;
