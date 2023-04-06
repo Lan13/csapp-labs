@@ -6,12 +6,13 @@
 
 ## 实验摘要
 
-在本课程中，我一共完成了下列 6 个实验：
+在本课程中，我一共完成了下列 7 个实验：
 
 - Data Lab：实现简单的逻辑、二进制补码和浮点函数
 - Bomb Lab：通过逆向工程来拆除炸弹
 - Attack Lab：完成代码注入和面向返回编程的攻击
 - Architecture Lab：通过修改功能和处理器设计来最小化指令运行数
+- Cache Lab：实现通用缓存模拟器且优化矩阵乘法
 - Shell Lab：使用 job control 实现一个简单 Unix shell 程序
 - Proxy Lab：实现一个并发且带缓存的 Web 代理程序
 
@@ -1669,6 +1670,226 @@ label012:
 
 可以看到，修改之后的程序正确性以及性能都达到了实验要求。另外，上述的解决方案主要是解决 `ncopy.ys` 中的代码修改，并没有对 `pipe-full.hcl` 的结构进行大规模的修改。事实上，SEQ 流水线的处理器也有不少可以优化的地方。例如分支预测，数据相关的结构和冒险冲突的优化。由于对代码修改足以完成实验要求，因此不再对处理器的结构进行优化。
 
+### Cache Lab
+
+首先获取实验框架，然后解压：
+
+```bash
+wget http://csapp.cs.cmu.edu/3e/cachelab-handout.tar
+tar -xvf cachelab-handout.tar
+rm cachelab-handout.tar
+```
+
+#### 1. Part A
+
+在第一部分，我们需要实现一个缓存模拟器。这个缓存器模拟器会将 `valgrind` 的内存地址作为程序的输入，我们需要模拟缓存在这些地址上的操作。对于本实验，我们只对数据缓存性能感兴趣，因此我们应该忽略所有缓存访问指令（以 `I` 为首的操作）。我们只需要对 `M`，`L` 和 `S` 操作进行模拟。
+
+首先我们使用一个结构体 `Result` 来记录最后的模拟结果：
+
+```c
+struct Result {
+    int hit_cnt;
+    int miss_cnt;
+    int evict_cnt;
+};
+```
+
+由于缓存的参数 `s`，`E` 和 `b` 都是通过命令行参数传入，因此我们首先需要先解析命令行。在官方文档的提示中，我们使用 `getopt` 函数进行解析：
+
+```c
+void parse_command(int argc, char **argv, int *s, int *E, int *b, char *t) {
+    int opt;
+    while(-1 != (opt = getopt(argc, argv, "hvs:E:b:t:"))) {
+        switch(opt) {
+            case 'h':
+                break;
+            case 'v':
+                break;
+            case 's':
+                *s = atoi(optarg);
+                break;
+            case 'E':
+                *E = atoi(optarg);
+                break;
+            case 'b':
+                *b = atoi(optarg);
+                break;
+            case 't':
+                strcpy(t, optarg);
+                break;
+            default:
+                printf("get unknown argument.\n");
+                break;
+        }
+    }
+    return;
+}
+```
+
+因为本实验并不强制要求实现 `-h` 和 `-v` 的功能，因此在这里省略。可以看出，解析命令行的函数是很简单的，重要的是我们要写出选项字符串 `"hvs:E:b:t:"`。这些对应这命令行选项  `-h`，`-v`，`-s`，`-E`，`-b` 和 `-t`，其中冒号表示参数，即冒号表示选项后面必须带有参数，而前面不带冒号的选项就表示为可选选项。然后 `optarg` 是定义为 `extern` 的变量，用来存放当前选项的参数，因此在解析到对应的选项时，可以使用对应的函数将其转化为我们想要的变量类型。
+
+得到了缓存参数之后，我们就可以创建一个缓存了。将缓存的基本行（即每组中的一行）定义成如下结构体：
+
+```c
+struct CacheLine {
+    int valid;  // valid bit
+    int tag;    // tag  bits
+    int cnt;    // LRU counter
+};
+```
+
+其中 `valid` 表示缓存的有效位，`tag` 表示缓存的标记位，而 `cnt` 是用来记录 LRU 的一个计数器，在本次实验中，将用其来完成时间戳计数器的功能。在每次进行缓存操作的时候，首先对访问组中所有有效的缓存的计数器加 1，然后当需要替换的时候，就可以把计数器最大的那个行给替换出来。并且在每次更新行的时候，都将计数器重置。这样便可以通过计数器的值，知道哪个行最近最少使用，因为最近使用的值，其计数器是被重置过的，因此计数器的值会小一些。
+
+```c
+struct CacheLine **create_cache(int s, int E) {
+    int S = 1 << s;
+    struct CacheLine ** cache = (struct CacheLine**)malloc(sizeof(struct CacheLine*) * S);
+    for (int i = 0; i < S; i++) {
+        cache[i] = (struct CacheLine*)malloc(sizeof(struct CacheLine) * E);
+        for (int j = 0; j < E; j++) {
+            cache[i][j].valid = 0;  // valid bit
+            cache[i][j].tag = -1;   // tag bits
+            cache[i][j].cnt = 0;    // LRU counter
+        }
+    }
+    return cache;
+}
+```
+
+创建缓存的逻辑也很简单，主要需要使用 `malloc` 函数分配对应大小的空间。这里需要注意，需要在每个循环内，即对每组中的每一行都需要进行 `malloc` 分配空间。
+
+接着我们需要读取 `-t` 参数的文件，用来模拟缓存操作。
+
+```c
+void get_operation(struct CacheLine **cache, struct Result *result, int s, int E, int b, char *t) {
+    FILE *file_ptr = fopen(t, "r");
+    if (file_ptr == NULL) {
+        return;
+    }
+
+    char operation;
+    unsigned int address;
+    int size;
+
+    while(fscanf(file_ptr, " %c %x, %d", &operation, &address, &size) > 0) {
+        switch(operation) {
+            case 'I':
+                break;
+            case 'L':
+                simulate_cache(cache, result, s, E, b, address);
+                break;
+            case 'M':
+                simulate_cache(cache, result, s, E, b, address);
+                simulate_cache(cache, result, s, E, b, address);
+                break;
+            case 'S':
+                simulate_cache(cache, result, s, E, b, address);
+                break;
+            default:
+                break;
+        }
+    }
+    
+    fclose(file_ptr);
+    return;
+}
+```
+
+根据官方的实验课提示，这里使用 `fopen` 函数和 `fscanf` 函数来读取操作。然后将对应的操作进行缓存模拟。注意其中 `M` 操作是需要进行两次缓存模拟的，而 `I` 操作是不用进行模拟的。
+
+最后就是进行缓存模拟了。在缓存模拟中，实际上我们是不关注缓存的数据，即在访问地址中，我们是不考虑块偏移的 `b` 位。我们只关注每个地址中的组索引和标记。因此我们首先需要将访存地址中的相应部分给提取出来：
+
+```c
+address = address >> b;     // b bits for block offset
+int mask_index = (1 << s) - 1;
+int index =  mask_index & address;
+int tag = address >> s;
+```
+
+通过上述操作，便可以得到访存的操作组索引 `index`。接下来便是完整操作：
+
+```c
+void simulate_cache(struct CacheLine **cache, struct Result *result, int s, int E, int b, unsigned int address) {
+    address = address >> b;     // b bits for block offset
+    int mask_index = (1 << s) - 1;
+    int index =  mask_index & address;
+    int tag = address >> s;
+
+    for (int j = 0; j < E; j++) {
+        if (cache[index][j].valid == 1) {
+            cache[index][j].cnt++;
+        }
+    }
+
+    // if there is hit
+    for (int j = 0; j < E; j++) {
+        if (cache[index][j].valid == 1 && cache[index][j].tag == tag) {
+            cache[index][j].cnt = 0;
+            result->hit_cnt++;
+            return;
+        }
+    }
+
+    // if there is cold cache
+    for (int j = 0; j < E; j++) {
+        if (cache[index][j].valid == 0) {
+            result->miss_cnt++;
+            cache[index][j].valid = 1;
+            cache[index][j].tag = tag;
+            return;
+        }
+    }
+
+    // there will be eviction 
+    result->evict_cnt++;
+    result->miss_cnt++;
+    int max_cnt = cache[index][0].cnt;
+    int max_j = 0;
+    for (int j = 1; j < E; j++) {
+        if (cache[index][j].cnt > max_cnt) {
+            max_cnt = cache[index][j].cnt;
+            max_j = j;
+        }
+    }
+    // evict cache
+    cache[index][max_j].tag = tag;
+    cache[index][max_j].cnt = 0;
+    return;
+}
+```
+
+首先需要将组内所有行的时间戳计数器递增。接着我们需要根据有效位 `valid` 和标记 `tag` 来查找是否有缓存命中，如果缓存命中后，则可以停止后续模拟操作。然后便是判断是否缓存不命中。因为缓存不命中是由包括冷缓存和冲突不命中的，因此在这里分开处理。首先判断是否有冷缓存，如果存在，则不命中次数会增加，但是此时我们要将访问地址记录到冷缓存中，更新冷缓存的有效位为 `1` 并且记录标记 `tag`。对于冲突不命中，我们需要找到时间戳计数器最大的那个行替换出来，因此先遍历组内所有的行，最后将其替换出来，并把计数器重置即可。
+
+```c
+int main(int argc, char **argv)
+{
+    int s, E, b;
+    char t[256];
+
+    // parse command line and get arguments
+    parse_command(argc, argv, &s, &E, &b, t);
+    // initial cache
+    struct CacheLine **cache = create_cache(s, E);
+    struct Result result = {0, 0, 0};
+    get_operation(cache, &result, s, E, b, t);
+    // free cache
+    for (int i = 0, S = 1 << s; i < S; i++) {
+        free(cache[i]);
+    }
+    free(cache);
+    printSummary(result.hit_cnt, result.miss_cnt, result.evict_cnt);
+    return 0;
+}
+```
+
+完成了上述操作，可以得到测试结果如下：
+
+![](image/csapp-cachelab-partA.png)
+
+#### 2. Part B
+
+
+
 ### Shell Lab
 
 首先获取实验框架，然后解压：
@@ -1969,7 +2190,7 @@ rm proxylab-handout.tar
 ./driver.sh: line 117: netstat: command not found
 ```
 
-解决方案是安装 `net-tool` 包：
+解决方案是安装 `net-tools` 包：
 
 ```bash
 sudo apt install net-tools
