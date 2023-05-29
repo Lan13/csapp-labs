@@ -1,6 +1,7 @@
 /* Author: Junwei Lan
  * StudentID: PB20111689
- * Date: 2023.4.10
+ * Created Date: 2023.4.10
+ * Updated Date: 2023.5.29
  * trans.c - Matrix transpose B = A^T
  *
  * Each transpose function must have a prototype of the form:
@@ -51,9 +52,110 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N])
         return;
     }
     if (M == 64 && N == 64) {
+        int v0, v1, v2, v3, v4, v5, v6, v7;
+        for (int i = 0; i < N; i += 8) {
+            for (int j = 0; j < M; j += 8) {
+                for (int k = i; k < i + 4; k++) {
+                    v0 = A[k][j];
+                    v1 = A[k][j + 1];
+                    v2 = A[k][j + 2];
+                    v3 = A[k][j + 3];
+                    v4 = A[k][j + 4];
+                    v5 = A[k][j + 5];
+                    v6 = A[k][j + 6];
+                    v7 = A[k][j + 7];
+
+                    // a 顺序存放
+                    B[j][k] = v0;
+                    B[j + 1][k] = v1;
+                    B[j + 2][k] = v2;
+                    B[j + 3][k] = v3;
+
+                    // b 逆序存放
+                    B[j][k + 4] = v7;
+                    B[j + 1][k + 4] = v6;
+                    B[j + 2][k + 4] = v5;
+                    B[j + 3][k + 4] = v4;
+                }
+                for (int k = 0; k < 4; k++) {
+                    // c 按列读取
+                    v0 = A[i + 4][j + 3 - k];
+                    v1 = A[i + 5][j + 3 - k];
+                    v2 = A[i + 6][j + 3 - k];
+                    v3 = A[i + 7][j + 3 - k];
+                    // d 按列读取
+                    v4 = A[i + 4][j + 4 + k];
+                    v5 = A[i + 5][j + 4 + k];
+                    v6 = A[i + 6][j + 4 + k];
+                    v7 = A[i + 7][j + 4 + k];
+
+                    // b' 将错位逆序顺序换回
+                    B[j + 4 + k][i] = B[j + 3 - k][i + 4];
+                    B[j + 4 + k][i + 1] = B[j + 3 - k][i + 5];
+                    B[j + 4 + k][i + 2] = B[j + 3 - k][i + 6];
+                    B[j + 4 + k][i + 3] = B[j + 3 - k][i + 7];
+
+                    // c -> c'
+                    B[j + 3 - k][i + 4] = v0;
+                    B[j + 3 - k][i + 5] = v1;
+                    B[j + 3 - k][i + 6] = v2;
+                    B[j + 3 - k][i + 7] = v3;
+                    // d -> d'
+                    B[j + 4 + k][i + 4] = v4;
+                    B[j + 4 + k][i + 5] = v5;
+                    B[j + 4 + k][i + 6] = v6;
+                    B[j + 4 + k][i + 7] = v7;
+                }
+            }
+        }
         return;
     }
     if (M == 61 && N == 67) {
+        int v0, v1, v2, v3, v4, v5, v6, v7;
+        // 分割成3块，64x56，64x5，3x61
+        for (int i = 0; i + 8 < N; i += 8) {
+            for (int j = 0; j + 8 < M; j += 8) {
+                for (int k = i; k < i + 8; k++) {
+                    v0 = A[k][j];
+                    v1 = A[k][j + 1];
+                    v2 = A[k][j + 2];
+                    v3 = A[k][j + 3];
+                    v4 = A[k][j + 4];
+                    v5 = A[k][j + 5];
+                    v6 = A[k][j + 6];
+                    v7 = A[k][j + 7];
+                    B[j][k] = v0;
+                    B[j + 1][k] = v1;
+                    B[j + 2][k] = v2;
+                    B[j + 3][k] = v3;
+                    B[j + 4][k] = v4;
+                    B[j + 5][k] = v5;
+                    B[j + 6][k] = v6;
+                    B[j + 7][k] = v7;
+                }
+                
+            }
+        }
+        for (int ii = 0; ii < 64; ii++) {
+            v0 = A[ii][56];
+            v1 = A[ii][57];
+            v2 = A[ii][58];
+            v3 = A[ii][59];
+            v4 = A[ii][60];
+            B[56][ii] = v0;
+            B[57][ii] = v1;
+            B[58][ii] = v2;
+            B[59][ii] = v3;
+            B[60][ii] = v4;
+        }
+        for (int jj = 0; jj < M; jj++) {
+            v0 = A[64][jj];
+            v1 = A[65][jj];
+            v2 = A[66][jj];
+            B[jj][64] = v0;
+            B[jj][65] = v1;
+            B[jj][66] = v2;
+        }
         return;
     }
 }
